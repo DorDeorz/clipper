@@ -228,7 +228,10 @@ def test_llm06_overloaded_is_retried_and_never_swallowed(conn: sqlite3.Connectio
 
 @needs_ffmpeg
 def test_rnd01_rnd06_output_format_in_awkward_dir(raw_clip: Path, tmp_path: Path) -> None:
-    out_dir = tmp_path / "Çıktı klasörü; ğüşiöç" / "a b:c"
+    # ":" cannot be in a Windows file name; there the drive letter ("C:") covers it.
+    import sys
+
+    out_dir = tmp_path / "Çıktı klasörü; ğüşiöç" / ("a b,c" if sys.platform == "win32" else "a b:c")
     res = asyncio.run(
         render_clip(RenderConfig(encoder="libx264"), raw_clip, 1.0, 7.0,
                     [("İstanbul'da", 1.2, 1.8), ("ılık", 2.0, 2.4)], out_dir, layout="blur",
