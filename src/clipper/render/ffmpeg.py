@@ -11,6 +11,7 @@ from pathlib import Path
 from clipper.config import RenderConfig
 from clipper.ffmpeg_probe import nvenc_works, run_tool, which
 from clipper.log import get_logger
+from clipper.util.proc import no_window
 
 log = get_logger("render")
 _ENCODER_CACHE: dict[str, str] = {}
@@ -85,6 +86,7 @@ async def run_render(
         cwd=str(cwd),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        **no_window(),
     )
     assert proc.stdout is not None and proc.stderr is not None
 

@@ -218,7 +218,16 @@ def test_restart_spawns_new_process(monkeypatch: pytest.MonkeyPatch) -> None:
     from clipper import __main__ as cli
 
     calls: list[list[str]] = []
-    monkeypatch.setattr("subprocess.Popen", lambda args: calls.append(args))
+    monkeypatch.setattr("subprocess.Popen", lambda args, **kw: calls.append(args))
     cli._restart(["--config", "c.yaml", "run"])
     assert calls[0][1:] == ["-m", "clipper", "--config", "c.yaml", "run", "--no-browser"]
     assert generate_key()  # keygen still available
+
+
+def test_no_console_window_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    from clipper.util import proc
+
+    monkeypatch.setattr(proc.sys, "platform", "linux")
+    assert proc.no_window() == {}
+    monkeypatch.setattr(proc.sys, "platform", "win32")
+    assert proc.no_window() == {"creationflags": 0x08000000}
