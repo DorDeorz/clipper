@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>clipper etiketleme</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    .lab { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 16px; }
+    @media (max-width: 900px) { .lab { grid-template-columns: 1fr; } }
+    video { width: 100%; background: #000; border-radius: 6px; }
+    #timeline { position: relative; height: 22px; background: #0d0f13; border: 1px solid var(--line);
+      border-radius: 4px; margin: 8px 0; cursor: pointer; }
+    #timeline .mark { position: absolute; top: 2px; bottom: 2px; background: var(--accent);
+      opacity: .7; border-radius: 2px; min-width: 2px; }
+    #timeline .pending { background: var(--warn); }
+    #timeline .head { position: absolute; top: 0; bottom: 0; width: 2px; background: #fff; }
+    #list .item { border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; margin-bottom: 6px; }
+    #list .item.sel { border-color: var(--accent); }
+    kbd { background: #262b35; border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; font-size: 12px; }
+    .saved { color: var(--ok); } .err { color: var(--bad); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>clipper etiketleme</h1>
+    <div id="meta" class="muted"></div>
+    <div id="save-state" class="muted"></div>
+  </header>
+  <main class="lab">
+    <section>
+      <video id="v" src="/video.mp4" controls preload="metadata"></video>
+      <div id="timeline" title="tıkla: o ana git"></div>
+      <div class="row">
+        <span id="clock" class="muted"></span>
+        <label>Hız <select id="rate">
+          <option>1</option><option selected>1.5</option><option>2</option><option>3</option></select></label>
+        <button id="b-start">Başlangıç (I)</button>
+        <button id="b-end">Bitiş (O)</button>
+      </div>
+      <div class="row">
+        <label>Tür <select id="type"></select></label>
+        <label>Kalite <select id="quality">
+          <option value="1">1 · idare eder</option><option value="2" selected>2 · iyi</option>
+          <option value="3">3 · kesin klip</option></select></label>
+        <label>Not <input id="note" size="24"></label>
+        <button id="b-add" class="ok">Ekle (Enter)</button>
+      </div>
+      <p class="muted">Kısayollar: <kbd>Boşluk</kbd> oynat/durdur · <kbd>←</kbd>/<kbd>→</kbd> 5 sn ·
+        <kbd>I</kbd> başlangıç · <kbd>O</kbd> bitiş · <kbd>1</kbd>–<kbd>3</kbd> kalite · <kbd>Enter</kbd> ekle ·
+        <kbd>Del</kbd> seçili etiketi sil. Etiketler her değişiklikte kaydedilir.
+        Sistemin bulduğu adaylar bu ekranda gösterilmez.</p>
+    </section>
+    <section>
+      <h2>Etiketler <span id="count" class="muted"></span></h2>
+      <div id="list"></div>
+    </section>
+  </main>
+  <script src="/static/label.js"></script>
+</body>
+</html>
