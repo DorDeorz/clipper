@@ -510,12 +510,17 @@ Reddet/onay kararları ve reddetme nedenleri saklanır. Faz 8'de eşik kalibrasy
 **Bitti sayılması için:** Gerçek bir Twitch VOD'u (kısa, 30–60 dk) video + chat olarak indirilip session'a dönüşüyor. Fixture ile aynı akış testte çalışıyor.
 
 ### Faz 2 — Dedektör
-- [ ] `signals.py` (bin'leme, spam kırpma, emote/anahtar kelime puanlama), `keywords_tr.py`
-- [ ] `audio.py` (segmentlerden PCM → dB/sn)
-- [ ] `detector.py` (Bölüm 4.3). Hem **akış** (canlı, saniye saniye `feed()`) hem **toplu** (VOD) modda aynı sınıf.
-- [ ] `signal_seconds` ve `candidates` yazımı, `cut` işini kuyruğa atma
-- [ ] `clipper report <session_id>` → tek HTML dosyası: sinyal grafiği (kendi SVG'miz), aday işaretleri, her adayın en sık chat mesajları
-- [ ] Testler: sentetik chat'te 3 spike'ın 3'ü de bulunuyor, düz bölgede yanlış pozitif yok, cooldown ve birleştirme çalışıyor, tek kullanıcı spam'i spike sayılmıyor
+- [x] `signals.py` (bin'leme, spam kırpma, emote/anahtar kelime puanlama), `keywords_tr.py`
+  - Not: `signal_seconds.emote` = emote + anahtar kelime + tekrar-spam toplam skoru (dedektörün kullandığı); `kw` = klip talebi mesaj sayısı (bilgi amaçlı). Bir kategori mesaj başına bir kez sayılır. Emote'lar büyük/küçük harfe duyarlı, Türkçe kelimeler değil (`render/tr_text.py` Faz 2'de erkenden yazıldı: `tr_upper`, `tr_lower`, `tr_casefold`). YouTube paid/membership mesajlarının ek ağırlığı (`weight - 1`) emote skoruna eklenir.
+- [x] `audio.py` (segmentlerden PCM → dB/sn)
+  - Not: PCM bellekte tutulmaz, saniye saniye okunur; saniyeler PDT'ye hizalı.
+- [x] `detector.py` (Bölüm 4.3). Hem **akış** (canlı, saniye saniye `feed()`) hem **toplu** (VOD) modda aynı sınıf.
+  - Not: (1) EWMA soğuk başlangıçta düz ortalama gibi davranır (`alpha = max(alpha, 1/n)`), yoksa baseline ilk saniyelere takılıp sürekli yanlış pozitif üretiyordu. (2) z paydası `max(σ, floor, √μ)`: sayım verisi için Poisson gürültü tabanı. (3) z 10'da kırpıldığı için tepe noktası eşitlikte kırpılmamış toplam reaksiyona göre seçilir. Yeni config alanları: `floors`, `peak_window`, `viewer_clip_bonus`, `viewer_clip_radius`. "Aday yoksa izleyici klibinden düşük eşikle aday aç" kısmı canlı klip sinyali gelince (Faz 6) eklenecek; bonus kısmı hazır (`add_viewer_clip`). Sentetik chat'te 40 rastgele tohumda 3/3 spike, 0 yanlış pozitif.
+- [x] `signal_seconds` ve `candidates` yazımı, `cut` işini kuyruğa atma
+  - Not: `clipper detect <session>` (yeniden çalıştırma `--force`, sadece henüz işlenmemiş adaylar silinir). `clipper vod` sonunda dedektör + rapor otomatik çalışır (`--no-detect`). Yayıncı bazlı `detector_overrides` ve `keywords` uygulanır. Kesit işi önceliği skora göre.
+- [x] `clipper report <session_id>` → tek HTML dosyası: sinyal grafiği (kendi SVG'miz), aday işaretleri, her adayın en sık chat mesajları
+  - Not: varsayılan çıktı `data/sessions/<id>/report.html`; açık/koyu tema.
+- [x] Testler: sentetik chat'te 3 spike'ın 3'ü de bulunuyor, düz bölgede yanlış pozitif yok, cooldown ve birleştirme çalışıyor, tek kullanıcı spam'i spike sayılmıyor
 
 **Bitti sayılması için:** Gerçek VOD'da `report` çıktısı makul adaylar gösteriyor. Kullanıcı 5–10 adayı izleyip "mantıklı" diyor.
 
