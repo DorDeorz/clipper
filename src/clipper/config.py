@@ -1,0 +1,242 @@
+"""Configuration: pydantic models, YAML loading and a tiny `.env` parser."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Any, Literal
+
+import yaml
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
+
+
+class _Strict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class PathsConfig(_Strict):
+    data_dir: Path = Path("./data")
+    ffmpeg: str = "ffmpeg"
+    ffprobe: str = "ffprobe"
+
+
+class MonitoringConfig(_Strict):
+    """r2: monitoring (live status, chat, clips, VOD chat) works without accounts by default.
+
+    `anonymous` uses Twitch anonymous IRC/GQL, YouTube innertube and Kick Pusher.
+    `official` falls back to Twitch Helix / YouTube Data API (needs keys).
+    """
+
+    mode: Literal["anonymous", "official"] = "anonymous"
+
+
+class PanelConfig(_Strict):
+    host: str = "127.0.0.1"
+    port: int = 8765
+
+
+class RecorderConfig(_Strict):
+    buffer_minutes: int = 15
+    quality: str = "1080p60,1080p,936p60,720p60,best"
+
+    @property
+    def quality_order(self) -> list[str]:
+        return [q.strip() for q in self.quality.split(",") if q.strip()]
+
+
+class DetectorWeights(_Strict):
+    rate: float = 0.40
+    uniq: float = 0.25
+    emote: float = 0.20
+    audio: float = 0.15
+
+
+class DetectorConfig(_Strict):
+    bin_seconds: int = 1
+    burst_window: int = 5
+    baseline_halflife: float = 300
+    warmup_seconds: int = 180
+    threshold: float = 3.0
+    min_rate: float = 0.5
+    min_ratio: float = 1.6
+    cooldown: int = 45
+    lag_seconds: float = 20
+    pre_roll: float = 40
+    post_roll: float = 25
+    weights: DetectorWeights = Field(default_factory=DetectorWeights)
+
+
+class TranscribeConfig(_Strict):
+    model: str = "large-v3"
+    device: str = "auto"
+    compute_type: str = "auto"
+    language: str = "tr"
+    beam_size: int = 5
+
+
+class LLMConfig(_Strict):
+    prefilter_model: str = "claude-haiku-5-5"
+    judge_model: str = "claude-sonnet-5-5"
+    max_candidates_per_hour: int = 12
+    min_keep_score: int = 65
+    monthly_budget_usd: float = 30
+
+
+class RenderConfig(_Strict):
+    width: int = 1080
+    height: int = 1920
+    fps: int = 30
+    encoder: Literal["auto", "h264_nvenc", "libx264"] = "auto"
+    loudness_lufs: float = -14
+    min_len: float = 12
+    max_len: float = 59
+
+
+class PublishConfig(_Strict):
+    min_gap_minutes: dict[str, int] = Field(
+        default_factory=lambda: {"youtube": 90, "instagram": 120, "x": 60, "tiktok": 120}
+    )
+    daily_cap: dict[str, int] = Field(
+        default_factory=lambda: {"youtube": 8, "instagram": 6, "x": 10, "tiktok": 6}
+    )
+    auto_publish_min_score: int = 85
+
+
+class StreamerConfig(_Strict):
+    display_name: str
+    platform: Literal["twitch", "kick", "youtube"]
+    channel: str
+    enabled: bool = True
+    layout: Literal["stack", "blur", "center"] = "stack"
+    keywords: dict[str, float] = Field(default_factory=dict)
+    detector_overrides: dict[str, Any] = Field(default_factory=dict)
+    publish_targets: list[str] = Field(default_factory=list)
+    auto_publish: bool = False
+
+
+class Secrets(BaseModel):
+    """Secrets read from the environment / `.env`. Never logged."""
+
+    anthropic_api_key: SecretStr | None = None
+    clipper_secret_key: SecretStr | None = None
+    twitch_client_id: SecretStr | None = None
+    twitch_client_secret: SecretStr | None = None
+    youtube_api_key: SecretStr | None = None
+    panel_password: SecretStr | None = None
+
+    @classmethod
+    def from_env(cls, env: dict[str, str]) -> Secrets:
+        values = {name: env[name.upper()] for name in cls.model_fields if env.get(name.upper())}
+        return cls(**values)
+
+
+class Config(_Strict):
+    paths: PathsConfig = Field(default_factory=PathsConfig)
+    panel: PanelConfig = Field(default_factory=PanelConfig)
+    monitoring: MonitoringConfig = Field(default_factory=MonitoringConfig)
+    recorder: RecorderConfig = Field(default_factory=RecorderConfig)
+    detector: DetectorConfig = Field(default_factory=DetectorConfig)
+    transcribe: TranscribeConfig = Field(default_factory=TranscribeConfig)
+    llm: LLMConfig = Field(default_factory=LLMConfig)
+    render: RenderConfig = Field(default_factory=RenderConfig)
+    publish: PublishConfig = Field(default_factory=PublishConfig)
+    streamers: list[StreamerConfig] = Field(default_factory=list)
+
+    @property
+    def db_path(self) -> Path:
+        return self.paths.data_dir / "clipper.db"
+
+    @property
+    def log_dir(self) -> Path:
+        return self.paths.data_dir / "logs"
+
+
+class ConfigError(Exception):
+    """Raised with a Turkish, user-facing message when config cannot be loaded."""
+
+
+def parse_dotenv(text: str) -> dict[str, str]:
+    """Parse a minimal `.env` file.
+
+    Supports `KEY=value`, optional `export ` prefix, `#` comments, and single/double
+    quoted values (double quotes understand `\\n`, `\\"` and `\\\\`).
+    """
+    result: dict[str, str] = {}
+    for lineno, raw in enumerate(text.splitlines(), start=1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].lstrip()
+        key, sep, value = line.partition("=")
+        key = key.strip()
+        if not sep or not key or not key.replace("_", "").isalnum():
+            raise ConfigError(f".env satır {lineno} okunamadı: {raw!r}")
+        value = value.strip()
+        if value[:1] in {'"', "'"}:
+            quote = value[0]
+            end = _find_closing_quote(value, quote)
+            if end < 0:
+                raise ConfigError(f".env satır {lineno}: kapanmayan tırnak")
+            inner = value[1:end]
+            if quote == '"':
+                inner = (
+                    inner.replace("\\\\", "\x00")
+                    .replace("\\n", "\n")
+                    .replace('\\"', '"')
+                    .replace("\x00", "\\")
+                )
+            value = inner
+        else:
+            hash_at = value.find(" #")
+            if hash_at >= 0:
+                value = value[:hash_at].rstrip()
+        result[key] = value
+    return result
+
+
+def _find_closing_quote(value: str, quote: str) -> int:
+    i = 1
+    while i < len(value):
+        ch = value[i]
+        if ch == "\\" and quote == '"':
+            i += 2
+            continue
+        if ch == quote:
+            return i
+        i += 1
+    return -1
+
+
+def load_dotenv(path: Path) -> dict[str, str]:
+    if not path.is_file():
+        return {}
+    return parse_dotenv(path.read_text(encoding="utf-8"))
+
+
+def load_config(path: Path | None = None) -> Config:
+    """Load `config.yaml` (or defaults if the file is absent)."""
+    if path is None or not path.is_file():
+        return Config()
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as exc:
+        raise ConfigError(f"{path} YAML olarak okunamadı: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ConfigError(f"{path} bir YAML sözlüğü olmalı")
+    try:
+        cfg = Config.model_validate(data)
+    except ValidationError as exc:
+        raise ConfigError(f"{path} geçersiz:\n{exc}") from exc
+    if not cfg.paths.data_dir.is_absolute():
+        cfg.paths.data_dir = (path.parent / cfg.paths.data_dir).resolve()
+    return cfg
+
+
+def load_secrets(dotenv_path: Path | None = None) -> Secrets:
+    """Environment variables override values from `.env`."""
+    env: dict[str, str] = {}
+    if dotenv_path is not None:
+        env.update(load_dotenv(dotenv_path))
+    env.update({k: v for k, v in os.environ.items() if v})
+    return Secrets.from_env(env)

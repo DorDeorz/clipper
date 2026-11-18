@@ -4,6 +4,8 @@
 > Aşamaları sırayla uygula; her aşamanın "Bitti sayılması için" maddeleri sağlanmadan bir sonrakine geçme.
 > İlerledikçe kutucukları (`[ ]` → `[x]`) işaretle.
 
+> **Revizyon r2 (2026-11-18): Anonim izleme.** İzleme tarafı (chat, canlı mı, izleyici sayısı, klip sinyali, kayıt, VOD chat) varsayılan olarak **hiçbir hesap/API key olmadan** çalışacak. Twitch: anonim IRC + anonim GQL. YouTube: innertube (web sitesinin iç API'si). Kick: Pusher. Resmi API'ler (Twitch Helix, YouTube Data API) sadece **opsiyonel yedek**. Değişen bölümler: 2, 4.1, 6, Faz 1, Faz 6. Faz 0'ı etkilemez; sadece `config.py`'de `monitoring.mode: anonymous | official` alanı olsun (varsayılan `anonymous`).
+
 ---
 
 ## 0. Sistem ne yapacak (tek paragraf)
@@ -44,9 +46,9 @@ Seçilen yayıncıların (Twitch / Kick / YouTube) canlı yayınlarını izler. 
 Claude Code ilgili aşamaya gelince bunları kullanıcıdan istesin, beklerken diğer işlere devam etsin.
 
 - [ ] **Anthropic API key** → `.env` içinde `ANTHROPIC_API_KEY`
-- [ ] **Twitch Developer app** (dev.twitch.tv/console). Client ID + Secret, `Client Credentials` akışı. Canlı mı kontrolü ve klip sinyali için.
-- [ ] **Google Cloud projesi** → YouTube Data API v3 etkin. OAuth consent screen ve OAuth Client (tip: *Desktop app*). Test modunda refresh token'lar ~7 günde düşebilir; uygulamayı "In production"a al veya haftalık yeniden yetkilendir.
-- [ ] **YouTube Data API key** (canlı chat okumak için, ayrı API key)
+- [ ] *(Opsiyonel, yedek)* **Twitch Developer app**: sadece anonim GQL bozulursa Helix yedeği için. İzleme için gerekmez.
+- [ ] **Google Cloud projesi** → YouTube Data API v3 etkin. OAuth consent screen ve OAuth Client (tip: *Desktop app*). **Sadece YouTube'a yükleme yapmak için.** Test modunda refresh token'lar ~7 günde düşebilir; uygulamayı "In production"a al veya haftalık yeniden yetkilendir.
+- [ ] *(Opsiyonel, yedek)* **YouTube Data API key**: sadece innertube chat bozulursa resmi API yedeği için. İzleme için gerekmez.
 - [ ] **Meta Developer app** + Instagram **Professional (Business/Creator)** hesap. İzin: `instagram_business_content_publish` (Instagram Login) veya `instagram_content_publish` (Facebook Login). Hesap app'te admin/tester rolündeyse app review olmadan kendi hesabımıza paylaşabiliriz.
 - [ ] **TikTok Developer app** + "Content Posting API" ürünü + Login Kit. Redirect URI HTTPS olmak zorunda (gerekirse GitHub Pages'te tek sayfalık redirect). Audit yokken her şey `SELF_ONLY` kalır. Bu yüzden varsayılan mod **inbox (taslak)**.
 - [ ] **X Developer hesabı** (pay-per-use, kredi yüklü). OAuth 2.0 PKCE, scope: `tweet.write tweet.read users.read media.write offline.access`. Redirect: `http://127.0.0.1:8765/callback/x`
@@ -108,9 +110,9 @@ clipper/
 │  ├─ log.py                 # JSON log + panel için ring buffer
 │  ├─ models.py              # ChatMessage, Segment, Candidate... dataclass'lar
 │  ├─ platforms/
-│  │  ├─ twitch/  live.py, hls.py, chat_irc.py, vod.py, vod_chat.py, helix.py
+│  │  ├─ twitch/  gql.py, live.py, hls.py, chat_irc.py, vod.py, vod_chat.py, helix.py (yedek)
 │  │  ├─ kick/    live.py, hls.py, chat_pusher.py
-│  │  └─ youtube/ live.py, hls.py (yt-dlp), chat.py
+│  │  └─ youtube/ live.py, hls.py (yt-dlp), innertube.py, chat_official.py (yedek)
 │  ├─ recorder/   ring_buffer.py, hls_recorder.py, cutter.py
 │  ├─ detect/     signals.py, detector.py, keywords_tr.py, audio.py
 │  ├─ transcribe/ whisper.py
@@ -284,8 +286,10 @@ streamers: []   # panelden de eklenebilir
 - `wss://irc-ws.chat.twitch.tv:443` → `CAP REQ :twitch.tv/tags twitch.tv/commands`, `PASS SCHMOOPIIE`, `NICK justinfan<rastgele 5 hane>`, `JOIN #<login>`.
 - `PING` gelince `PONG`. Kopunca üstel backoff ile yeniden bağlan (1, 2, 4… max 60 sn).
 - Tag'lerden al: `tmi-sent-ts` (ms, mesaj zamanı), `user-id`, `emotes` (emote id/konumları), `display-name`. Mesaj zamanı olarak `tmi-sent-ts` kullan, yerel saat değil.
-- Ek sinyal (opsiyonel, app token ile): Helix `GET /helix/clips?broadcaster_id=&started_at=` her 60 sn. İzleyicilerin yeni açtığı klipler güçlü sinyaldir (`created_at` zamanına bonus).
-- Canlı mı: Helix `GET /helix/streams?user_login=` (Client Credentials app token).
+- **Canlı mı / izleyici / başlık / kategori (anonim GQL):** `POST https://gql.twitch.tv/gql`, header `Client-ID: kimne78kx3ncx6brgo4mv6wki5h1ko` (Twitch web sitesinin public ID'si, hesap gerekmez). Sorgu: `user(login:"<login>") { id stream { id type createdAt viewersCount title game { name } } }`. `stream == null` → offline. Her 60 sn.
+- **Klip sinyali (anonim GQL):** `user(login) { clips(criteria:{period:LAST_DAY, sort:CREATED_AT_DESC}, first:20) { edges { node { id createdAt viewCount } } } }`. Her 60 sn. İzleyicilerin yeni açtığı klipler güçlü sinyaldir (`createdAt` zamanına bonus).
+- Ham sorgu reddedilirse (Twitch bazı alanlar için "integrity" ister veya persisted query zorunlu kılabilir): önce persisted query (`extensions.persistedQuery.sha256Hash`, hash'ler config'te) dene. O da olmazsa `monitoring.mode: official` → Helix `GET /helix/streams` ve `GET /helix/clips` (app token) yedeği. *(Claude Code: hangi sorguların anonim çalıştığını Faz 6 başında canlı test et, sonucu buraya not düş.)*
+- **Hız sınırı:** Anonim GQL'e kanal başı dakikada ≤ 2 istek. Çoklu kanalda sorguları tek batch istekte birleştir (GQL dizi gövdesi kabul eder).
 
 **Kick (resmi olmayan Pusher WS — kırılabilir, izole et)**
 - Kanal bilgisi: `GET https://kick.com/api/v2/channels/{slug}` → `chatroom.id`, `livestream` (null değilse canlı), `playback_url`. Cloudflare yüzünden **`curl_cffi`** ile `impersonate="chrome"` kullan.
@@ -294,10 +298,17 @@ streamers: []   # panelden de eklenebilir
 - Pusher key/cluster değişebilir: config'e taşı. Başlangıçta bağlantı testi yap, hata mesajı net olsun ("Kick Pusher anahtarı değişmiş olabilir").
 - Resmi Kick API'nin `chat.message.sent` webhook'u public HTTPS endpoint ister ve hatada 3 denemeden sonra aboneliği düşürür. **v1'de kullanılmayacak**; `platforms/kick/` içinde ileride eklenecek alternatif olarak not düş.
 
-**YouTube**
-- Canlı videoId: `https://www.youtube.com/channel/<id>/live` sayfasını httpx ile çek, `"videoId"` + `isLive` parse et (resmi olmayan, izole). Yedek: yt-dlp.
-- `liveChatId`: `videos.list?part=liveStreamingDetails` (1 birim).
-- Chat: `liveChatMessages.streamList` (server-streaming, çağrı başı 5 birim, `pageToken` ile devam). Yoksa `liveChatMessages.list` + `pollingIntervalMillis` kadar bekleme. Varsayılan günlük kota 10.000 birim; kota sayacını DB'de tut.
+**YouTube (varsayılan: innertube, anonim, kotasız)**
+- Canlı videoId: `https://www.youtube.com/channel/<id>/live` (veya `/@handle/live`) sayfasını httpx ile çek, `ytInitialPlayerResponse` içinden `videoDetails.videoId` + `isLive` + izleyici sayısı parse et. Yedek: yt-dlp.
+- Header'larda gerçekçi bir masaüstü `User-Agent` ve `Accept-Language: tr-TR` kullan. AB/TR'de çıkabilen consent sayfası için `SOCS`/`CONSENT` cookie'si gönder.
+- **Canlı chat:**
+  1. `GET https://www.youtube.com/live_chat?v=<videoId>` → HTML'den `ytcfg` (`INNERTUBE_API_KEY`, `INNERTUBE_CONTEXT_CLIENT_VERSION`) ve `ytInitialData` içindeki ilk `continuation` token'ı.
+  2. Döngü: `POST https://www.youtube.com/youtubei/v1/live_chat/get_live_chat?key=<key>` gövde `{"context":{"client":{"clientName":"WEB","clientVersion":"<ver>","hl":"tr"}},"continuation":"<token>"}`.
+  3. Cevaptaki `continuationContents.liveChatContinuation.actions[].addChatItemAction.item.liveChatTextMessageRenderer` → `timestampUsec`, `authorExternalChannelId`, `message.runs` (metin + `emoji` run'ları). Paid message / membership renderer'ları da sayılır (ekstra ağırlık 1.5).
+  4. Sonraki token ve bekleme süresi: `continuations[0].(timedContinuationData|invalidationContinuationData).continuation / timeoutMs`.
+- **VOD / bitmiş yayın chat replay:** `GET /live_chat_replay?v=<id>` → aynı şekilde key + continuation, sonra `POST /youtubei/v1/live_chat/get_live_chat_replay` (gövdeye `currentPlayerState: {playerOffsetMs: "<ms>"}`). Aksiyonlar `replayChatItemAction` içinde, `videoOffsetTimeMsec` ile gelir.
+- Hepsi `platforms/youtube/innertube.py` içinde izole. Alan yolları değişirse parse hatası net loglansın.
+- **Yedek (`monitoring.mode: official`):** Data API `videos.list` → `liveChatId`, sonra `liveChatMessages.streamList` (çağrı başı 5 birim, günlük 10.000 kota, sayaç DB'de).
 
 **Ortak `ChatMessage` modeli:** `ts: float (unix sn), user_id: str (sha1 ile hash'lenmiş), text: str, emotes: list[str], platform: str`.
 
@@ -468,14 +479,19 @@ Reddet/onay kararları ve reddetme nedenleri saklanır. Faz 8'de eşik kalibrasy
 ## 5. Aşamalar (Claude Code bu sırayla uygular)
 
 ### Faz 0 — İskelet
-- [ ] `uv` projesi, `pyproject.toml`, `src/` layout, `clipper` CLI (`argparse`, harici CLI kütüphanesi yok)
-- [ ] `config.py` (pydantic + YAML + `.env` okuma, kendi küçük `.env` parser'ımız)
-- [ ] `db.py`: bağlantı (WAL, `foreign_keys=ON`), sürüm numaralı migration sistemi (`schema_version` tablosu), Bölüm 3.4 şeması
-- [ ] `jobs.py`: `enqueue(type, payload, pool, priority, run_after)`. `claim(pool)` → `UPDATE … WHERE id = (SELECT … LIMIT 1) RETURNING *` atomik alma + `locked_until`. Başarı/başarısızlık, üstel backoff, `dead` durumu, crash recovery.
-- [ ] `log.py`: JSON satır log (dosya, günlük rotasyon) + bellekte son 500 satır
-- [ ] `util/crypto.py` (Fernet), `util/timeutil.py`, `util/fs.py` (atomik yazma, disk doluluk kontrolü)
-- [ ] `ffmpeg` / `ffprobe` keşfi ve sürüm/encoder kontrolü: `clipper doctor` komutu (ffmpeg, libass, nvenc, CUDA, model, API key, disk alanı → yeşil/kırmızı rapor)
-- [ ] pytest altyapısı + `tests/fixtures/make_fixtures.py` (ffmpeg `testsrc2` + `sine` ile 3 dk 1920x1080 test videosu, sentetik chat jsonl: düz trafik + 3 belirgin spike)
+- [x] `uv` projesi, `pyproject.toml`, `src/` layout, `clipper` CLI (`argparse`, harici CLI kütüphanesi yok)
+  - Not: Faz 0'da `doctor`, `db migrate|version` ve `keygen` (CLIPPER_SECRET_KEY üretir) komutları var; diğerleri ilgili fazda eklenecek.
+- [x] `config.py` (pydantic + YAML + `.env` okuma, kendi küçük `.env` parser'ımız)
+  - Not: r2 gereği `monitoring.mode: anonymous | official` alanı eklendi (varsayılan `anonymous`).
+- [x] `db.py`: bağlantı (WAL, `foreign_keys=ON`), sürüm numaralı migration sistemi (`schema_version` tablosu), Bölüm 3.4 şeması
+- [x] `jobs.py`: `enqueue(type, payload, pool, priority, run_after)`. `claim(pool)` → `UPDATE … WHERE id = (SELECT … LIMIT 1) RETURNING *` atomik alma + `locked_until`. Başarı/başarısızlık, üstel backoff, `dead` durumu, crash recovery.
+  - Not: kurtarılan işler `run_after` değerini korur (sıradaki yerini kaybetmez); kilit süresi dolmuş ama denemesi bitmiş iş `dead` olur. Uzun işler için `heartbeat()` kilidi uzatır.
+- [x] `log.py`: JSON satır log (dosya, günlük rotasyon) + bellekte son 500 satır
+- [x] `util/crypto.py` (Fernet), `util/timeutil.py`, `util/fs.py` (atomik yazma, disk doluluk kontrolü)
+- [x] `ffmpeg` / `ffprobe` keşfi ve sürüm/encoder kontrolü: `clipper doctor` komutu (ffmpeg, libass, nvenc, CUDA, model, API key, disk alanı → yeşil/kırmızı rapor)
+  - Not: keşif kodu `src/clipper/ffmpeg_probe.py`, rapor `src/clipper/doctor.py` (3.3'teki yapıya eklendi). Üç seviye: yeşil / sarı uyarı / kırmızı; sadece kırmızı varsa çıkış kodu 1. NVENC derlemede olsa bile küçük bir deneme encode'u ile gerçekten çalıştığı kontrol ediliyor. `--online` bayrağı Faz 6'da.
+- [x] pytest altyapısı + `tests/fixtures/make_fixtures.py` (ffmpeg `testsrc2` + `sine` ile 3 dk 1920x1080 test videosu, sentetik chat jsonl: düz trafik + 3 belirgin spike)
+  - Not: ek olarak GitHub Actions CI (Ubuntu + Windows: ruff, pytest, doctor) eklendi.
 
 **Bitti sayılması için:** `uv run clipper doctor` çalışıyor. `uv run pytest` yeşil. İş kuyruğu testleri (eşzamanlı claim'de çift alma yok, crash recovery) geçiyor.
 
@@ -483,6 +499,7 @@ Reddet/onay kararları ve reddetme nedenleri saklanır. Faz 8'de eşik kalibrasy
 - [ ] `clipper vod --video <file> --chat <jsonl> --streamer <ad>`: session oluşturur, videoyu segment gibi kaydeder (tek segment, pdt=0 tabanlı)
 - [ ] Twitch VOD indirici (kendi kodumuz: GQL token + usher VOD m3u8 + segment indirme + concat). `clipper vod --twitch-vod <id>`
 - [ ] Twitch VOD chat indirici (GQL comments, cursor ile sayfalama → jsonl). Persisted query hash'i config'te.
+- [ ] YouTube VOD: video yt-dlp ile, chat replay innertube `get_live_chat_replay` ile (anonim) → jsonl. `clipper vod --youtube <videoId>`
 - [ ] Ortak chat jsonl formatı + dönüştürücüler (TwitchDownloader JSON formatından içe aktarma da olsun, elde hazır veri varsa diye)
 
 **Bitti sayılması için:** Gerçek bir Twitch VOD'u (kısa, 30–60 dk) video + chat olarak indirilip session'a dönüşüyor. Fixture ile aynı akış testte çalışıyor.
@@ -523,9 +540,10 @@ Reddet/onay kararları ve reddetme nedenleri saklanır. Faz 8'de eşik kalibrasy
 **Bitti sayılması için:** VOD'dan gelen klipler panelde izlenip onaylanabiliyor, başlık düzenlenip yeniden render alınabiliyor.
 
 ### Faz 6 — Canlı hat
-- [ ] `platforms/*/live.py` (canlı mı kontrolü), `LiveWatcher`
+- [ ] Anonim uç noktaların canlı doğrulaması: Twitch GQL (stream, clips) ve YouTube innertube (live_chat) gerçekte çalışıyor mu? Sonucu Bölüm 4.1'e not düş. Çalışmayan için persisted query / resmi API yedeğini devreye al.
+- [ ] `platforms/*/live.py` (canlı mı kontrolü; Twitch: anonim GQL, Kick: kanal API, YouTube: /live sayfası), `LiveWatcher`
 - [ ] `hls_recorder.py` + Twitch/Kick/YouTube HLS çözümleyiciler (Bölüm 4.2), reklam segment filtresi, token yenileme
-- [ ] Chat istemcileri: `twitch/chat_irc.py`, `kick/chat_pusher.py`, `youtube/chat.py` (otomatik yeniden bağlanma, kopma süresince "chat yok" işaretlenir ve dedektör o aralıkta tetiklemez)
+- [ ] Chat istemcileri: `twitch/chat_irc.py` (anonim), `kick/chat_pusher.py` (anonim), `youtube/innertube.py` (anonim) + `youtube/chat_official.py` (yedek). Hepsinde otomatik yeniden bağlanma, kopma süresince "chat yok" işaretlenir ve dedektör o aralıkta tetiklemez)
 - [ ] Dedektörün akış modu + canlı ses analizi (her yeni segmentte)
 - [ ] Halka tampon temizliği, bekleyen kesimleri koruma
 - [ ] Session kapanışı (yayın bitti → 2 dk bekle → kaydı kapat, kalan işleri bitir)
@@ -559,7 +577,8 @@ Reddet/onay kararları ve reddetme nedenleri saklanır. Faz 8'de eşik kalibrasy
 
 | Nokta | Risk | Önlem |
 |---|---|---|
-| Twitch GQL (PlaybackAccessToken, VOD comments) | Resmi değil, hash/Client-ID değişebilir | `platforms/twitch/` içinde izole, config'ten parametre, net hata mesajı, entegrasyon testi `clipper doctor --online` |
+| Twitch GQL (canlı durum, klipler, PlaybackAccessToken, VOD comments) | Resmi değil, hash/Client-ID değişebilir, integrity isteyebilir | `platforms/twitch/` içinde izole, config'ten parametre, net hata mesajı, entegrasyon testi `clipper doctor --online`, Helix yedeği |
+| YouTube innertube (canlı chat, replay) | Resmi değil, JSON yolları ve consent sayfası değişebilir | `platforms/youtube/innertube.py` izole, parse hatası alarmı, Data API yedeği |
 | Kick API + Pusher | Resmi değil, Cloudflare | `curl_cffi`, key config'te, bağlantı testi |
 | YouTube `/live` sayfası parse | HTML değişebilir | yt-dlp yedeği |
 | Chat ↔ video zaman hizası | Kayma = yanlış kesit | PDT tabanlı hiza, `lag_seconds` kalibrasyonu, LLM'in kesin kırpması |
