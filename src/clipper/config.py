@@ -37,6 +37,8 @@ class TwitchConfig(_Strict):
     # Public Client-ID of the twitch.tv website (no account needed).
     client_id: str = "kimne78kx3ncx6brgo4mv6wki5h1ko"
     usher_vod_url: str = "https://usher.ttvnw.net/vod/{vod_id}.m3u8"
+    gql_retries: int = 4
+    gql_retry_base_seconds: float = 1.0
     usher_live_url: str = "https://usher.ttvnw.net/api/channel/hls/{login}.m3u8"
     # Persisted query hashes (sha256). Empty string = send the raw query instead.
     persisted_queries: dict[str, str] = Field(
