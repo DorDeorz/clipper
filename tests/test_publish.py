@@ -661,7 +661,7 @@ def _claim(conn: sqlite3.Connection) -> jobs.Job:
 
 def test_publish_job_success_and_status(world: tuple[sqlite3.Connection, Config]) -> None:
     conn, cfg = world
-    scheduler.plan(conn, cfg, 1, ["youtube"], accounts, now=0)
+    scheduler.plan(conn, cfg, 1, ["youtube"], accounts, now=1_800_000_000.0)
     fake = FakePublisher(
         [PublishResult("processing", "v1"), PublishResult("published", "v1", "https://y/v1")]
     )
@@ -679,7 +679,7 @@ def test_publish_job_errors_and_permission_guard(
     world: tuple[sqlite3.Connection, Config],
 ) -> None:
     conn, cfg = world
-    scheduler.plan(conn, cfg, 1, ["youtube"], accounts, now=0)
+    scheduler.plan(conn, cfg, 1, ["youtube"], accounts, now=1_800_000_000.0)
     fake = FakePublisher([PublishError("HTTP 503"), PublishError("format", retry=False)])
     pubs = Publishing(conn, cfg, {"youtube": fake})  # type: ignore[dict-item]
     with pytest.raises(PublishError):
