@@ -12,3 +12,5 @@ build/
 tests/fixtures/out/
 assets/fonts/*.ttf
 assets/fonts/*.otf
+eval/synthetic/
+eval/whisper_cache/

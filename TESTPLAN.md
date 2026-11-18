@@ -42,9 +42,10 @@
   - `fake_publishers.py`: YouTube resumable upload, IG container/rupload/publish, X media upload v2 + tweets, TikTok inbox init/PUT/status. Hepsinde 429, 5xx, token süresi dolması ve yarıda kopma modları.
   > Not: `tests/fakes/` (fake_twitch: IRC-WS + GQL + HLS; fake_kick: API + Pusher; fake_youtube: /live + live_chat zinciri; faults: 429/5xx/401/403/kopma enjeksiyonu). Yayıncılar için mevcut `tests/test_publish.py` sahteleri `faults.Faulty` ile sarılıyor. Testler: `tests/test_integration.py` (`-m integration`). Bulunan hatalar: YouTube yükleme 429'u kalıcı hata sayıp yüklemeyi bırakıyordu (artık Retry-After ile tekrar); YouTube chat yapısı değişince sessizce 0 mesaj okunuyordu (artık 3 sayfa üst üste tanınmayan öğe → anlaşılır hata).
 - [x] **Senaryo üretici** `tests/fixtures/scenarios.py`: Bölüm 2.1'deki her senaryo için video + chat + olaylar + (gerekiyorsa) sahte transkript + **beklenen sonuç dosyası** (`expected.json`) üretir.
-  > Not: `clipper.evals.scenarios` (testler `tests/fixtures/scenarios.py` üzerinden kullanır). Dedektör testleri için sadece ses segmentleri (8 kHz WAV), tam pipeline için `video=True` ile 1080p mpegts segmentleri. Sapmalar: S02'de ses olay anında, chat tepkisi `lag_seconds` (20 sn) sonra zirve yapıyor (DET-20 ile tutarlı olsun diye; plandaki "2 sn önce" varsayılan lag ile çelişiyordu). S17/S18 6 dk (3 dk'lık `warmup_seconds` yüzünden). S12 VOD modunda kopma bilgisi olmadığından sadece "mesaj yok" olarak modellendi.
+  > Not: `clipper.evals.scenarios` (testler `tests/fixtures/scenarios.py` üzerinden kullanır). Dedektör testleri için sadece ses segmentleri (8 kHz WAV), tam pipeline için `video=True` ile 1080p mpegts segmentleri. Sapmalar: S02'de ses olay anında, chat tepkisi `lag_seconds` (20 sn) sonra zirve yapıyor (DET-20 ile tutarlı olsun diye; plandaki "2 sn önce" varsayılan lag ile çelişiyordu). S17/S18 6 dk (3 dk'lık `warmup_seconds` yüzünden). S14/S15 de 6 dk; içerik anı 270. sn'de (tam pipeline'da klip üretmeleri için). S12 VOD modunda kopma bilgisi olmadığından sadece "mesaj yok" olarak modellendi.
 - [ ] **Etiketleme modu (panel):** `clipper label <session_id>` paneli etiketleme ekranında açar. Video oynatıcı + zaman çizelgesi. Kullanıcı "iyi an" işaretler: başlangıç/bitiş, tür (`komik / şok / hikâye / atışma / oyun anı / diğer`), kalite (1 = idare eder, 2 = iyi, 3 = kesin klip). Çıktı `eval/labels/<session>.json`. Sistemin aday çıktıları bu ekranda **gizli** olmalı (etiketleyen etkilenmesin).
-- [ ] **Eval rapor üretici:** her `clipper eval ...` koşusu `eval/reports/<tarih>_<tür>.html` + `.json` üretir. Metrik tabloları, başarısız test listesi, sinyal grafikleri, örnek klip linkleri, maliyet.
+- [x] **Eval rapor üretici:** her `clipper eval ...` koşusu `eval/reports/<tarih>_<tür>.html` + `.json` üretir. Metrik tabloları, başarısız test listesi, sinyal grafikleri, örnek klip linkleri, maliyet.
+  > Not: `clipper.evals.report` temel sürüm: özet + senaryo/kontrol tablosu + başarısız liste (JSON + HTML). Sinyal grafikleri ve maliyet sütunu henüz yok.
 - [ ] **Kaynak izleyici:** eval sırasında her 10 sn: RSS bellek, CPU %, GPU VRAM (varsa `nvidia-smi --query-gpu`), disk kullanımı, açık dosya sayısı, kuyruk uzunlukları → `metrics.csv`.
 
 ---
@@ -154,7 +155,7 @@ Mevcut testlere ek olarak şunların hepsi var olmalı ve geçmeli:
 - [x] RND-04 ASS: kelime vurgusu olay sayısı = kelime sayısı, satır ≤ 18 karakter, hook ilk 2.5 sn — `test_render::test_build_ass_lines_and_highlight, test_wrap_words`
 - [x] RND-05 `tr_upper`/`tr_lower` tüm Türkçe harf çiftleri (ç ğ ı i ö ş ü, İ I) — `test_tr_text::test_tr_upper, test_tr_lower, test_casefold_mixes_i`
 - [x] RND-06 Windows yol kaçışları: boşluk, `:` ve Türkçe karakter içeren klasör adıyla render başarılı — `test_testplan_units::test_rnd01_rnd06_output_format_in_awkward_dir`
-- [ ] RND-07 S13 reklam karesi yok, S15 facecam doğru panelde (kare örnekleyip ortalama renk kontrolü)
+- [x] RND-07 S13 reklam karesi yok, S15 facecam doğru panelde (kare örnekleyip ortalama renk kontrolü)
 - [x] RND-08 Altyazı senkronu: sahte transkriptteki kelime zamanları ile ASS olay zamanları arasında fark ≤ 50 ms — `test_testplan_units::test_rnd08_caption_events_match_word_times`
 
 **Yayınlama (PUB, sahte sunucularla)**
@@ -164,7 +165,7 @@ Mevcut testlere ek olarak şunların hepsi var olmalı ve geçmeli:
 - [x] PUB-04 TikTok inbox: init → chunk PUT → status; direct mod config'te kapalıyken asla çağrılmıyor — `test_publish::test_tiktok_inbox_flow, test_tiktok_direct_needs_audit`
 - [x] PUB-05 Token süresi doldu → refresh → işlem devam; refresh de başarısızsa panelde "yeniden bağla" — `test_publish::test_oauth_flow_stores_encrypted_and_refreshes, test_oauth_tiktok_hex_pkce_and_failed_refresh`
 - [x] PUB-06 Zamanlayıcı: `min_gap_minutes` ve `daily_cap` (saat donmuş sahte zamanla test) — `test_publish::test_plan_gaps_caps_and_missing_account`
-- [ ] PUB-07 S17 (müzik riski) ve S18 (izin yok) için publish işi **hiç oluşmuyor**
+- [x] PUB-07 S17 (müzik riski) ve S18 (izin yok) için publish işi **hiç oluşmuyor**
 - [x] PUB-08 Aynı klip aynı platform+hesaba iki kez yüklenmiyor (UNIQUE + idempotency) — `test_publish::test_plan_gaps_caps_and_missing_account (aynı klip+platform ikinci kez planlanmıyor) + DB UNIQUE`
 
 **Panel (PNL)**
@@ -183,11 +184,12 @@ Mevcut testlere ek olarak şunların hepsi var olmalı ve geçmeli:
 İlk koşu `llm.cache_mode=record` ile gerçek Claude'a gider (~$0.30), sonra hep `replay`.
 
 Geçme kriterleri:
-- [ ] E2E-01 Tüm senaryolarda aday sayısı ve kaynaklar `expected.json` ile aynı
-- [ ] E2E-02 Üretilen her klip RND-01–RND-04'ten geçiyor
-- [ ] E2E-03 "Pik → klip hazır" gecikmesi (GPU'lu makinede) medyan ≤ 3 dk, p95 ≤ 6 dk
-- [ ] E2E-04 Yasak durumlar (S17, S18) ihlal edilmiyor
-- [ ] E2E-05 Koşu sonunda `jobs` tablosunda `running`/`queued` iş kalmıyor, `dead` iş yok
+- [x] E2E-01 Tüm senaryolarda aday sayısı ve kaynaklar `expected.json` ile aynı
+- [x] E2E-02 Üretilen her klip RND-01–RND-04'ten geçiyor
+- [!] E2E-03 "Pik → klip hazır" gecikmesi (GPU'lu makinede) medyan ≤ 3 dk, p95 ≤ 6 dk
+- [x] E2E-04 Yasak durumlar (S17, S18) ihlal edilmiyor
+- [x] E2E-05 Koşu sonunda `jobs` tablosunda `running`/`queued` iş kalmıyor, `dead` iş yok
+  > Not (2026-11-18): `uv run clipper eval synthetic --llm oracle` ile 18/18 geçti (LLM yerine senaryo doğrusunu bilen sahte Claude). Gerçek Claude ile `--llm record` koşusu kullanıcının makinesinde ANTHROPIC_API_KEY girildikten sonra yapılacak. E2E-03: VOD modunda pik→klip gecikmesi ölçülmüyor, canlı/GPU testinde (Seviye 6) ölçülecek.
 
 ---
 

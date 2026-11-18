@@ -39,6 +39,7 @@ from clipper.util.proc import no_window
 SEED = 20261118
 AUDIO_RATE = 8000
 SEGMENT_SECONDS = 60
+FACECAM_RECT = {"x": 0.75, "y": 0.0, "w": 0.25, "h": 0.25}  # the blue CAM box
 LAG = 20.0  # default detector.lag_seconds: chat peaks ~20 s after what caused it
 
 FLAT_TEXTS = (
@@ -257,21 +258,21 @@ SCENARIOS: tuple[Scenario, ...] = (
         ads=((280, 400),),
         tags=("render",),
     ),
+    # S14/S15: 6 min with one reaction so a clip is actually rendered (the plan's 2-3 min
+    # are inside detector.warmup_seconds and would give no clip to look at).
     Scenario(
-        "S14",
-        "Türkçe karakterli transkript",
-        120,
-        Expected(0, caption_text="İSTANBUL'DA ILIK ŞİŞLİ ÖĞÜŞ"),
-        transcript=((40, 44, "İstanbul'da ılık şişli öğüş"),),
+        "S14", "Türkçe karakterli transkript", 360,
+        Expected(1, ((270.0, 4.0, ("reactive",)),),
+                 caption_text="İSTANBUL'DA ILIK ŞİŞLİ ÖĞÜŞ"),
+        bursts=(_laugh_at(270, rate=9.0),), audio=((269, 3, 18.0),),
+        transcript=((262, 266, "İstanbul'da ılık şişli öğüş"),),
         tags=("render",),
     ),
     Scenario(
-        "S15",
-        "Facecam düzeni",
-        180,
-        Expected(0, facecam_top=True),
-        facecam=True,
-        tags=("render",),
+        "S15", "Facecam düzeni", 360,
+        Expected(1, ((270.0, 4.0, ("reactive",)),), facecam_top=True),
+        bursts=(_laugh_at(270, rate=9.0),), audio=((269, 3, 18.0),),
+        facecam=True, tags=("render",),
     ),
     Scenario(
         "S16",
@@ -402,7 +403,7 @@ def _video_segment(
         if is_ad
         else f"testsrc2=size=1920x1080:rate=30:duration={dur:.3f}"
     )
-    vf = "drawbox=x=1440:y=0:w=480:h=270:color=blue@1:t=fill" if facecam else "null"
+    vf = "drawbox=x=1440:y=0:w=480:h=270:color=blue@1:t=fill" if facecam and not is_ad else "null"
     path.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
         ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
@@ -487,9 +488,16 @@ def load_session(
     """Create a finished VOD session for the scenario. Returns the session id."""
     sid = get_or_create_streamer(conn, f"sentetik_{s.id.lower()}", "twitch", s.id.lower())
     conn.execute(
-        "UPDATE streamers SET permission_ok = ?, auto_publish = ? WHERE id = ?",
-        (int(s.permission_ok), int(s.auto_publish), sid),
-    )
+        "UPDATE streamers SET permission_ok = ?, auto_publish = ?, publish_targets = ?"
+        " WHERE id = ?",
+        (int(s.permission_ok), int(s.auto_publish),
+         json.dumps(["youtube", "x"] if s.auto_publish else []), sid),
+    )  # fmt: skip
+    if s.facecam:
+        conn.execute(
+            "UPDATE streamers SET layout = 'stack', facecam_rect = ? WHERE id = ?",
+            (json.dumps(FACECAM_RECT), sid),
+        )
     session_id, session_dir = create_session(conn, data_dir, sid, "vod", title=s.title)
     for seg in json.loads((built / "segments.json").read_text(encoding="utf-8")):
         add_segment(

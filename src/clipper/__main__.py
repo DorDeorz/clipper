@@ -116,6 +116,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_cal.add_argument("streamer", help="yayıncı adı ya da kanal")
     p_cal.add_argument("--apply", action="store_true", help="öneriyi yayıncıya kaydet")
 
+    p_eval = sub.add_parser("eval", help="test planı değerlendirmeleri (TESTPLAN.md)")
+    eval_sub = p_eval.add_subparsers(dest="eval_kind", required=True, metavar="TÜR")
+    p_syn = eval_sub.add_parser("synthetic", help="S01–S18 sentetik senaryolar, tam pipeline")
+    p_syn.add_argument("--only", action="append", help="sadece bu senaryo(lar), ör. S02")
+    p_syn.add_argument(
+        "--llm",
+        choices=["oracle", "record", "replay"],
+        default="replay",
+        help="oracle: yerleşik sahte (ücretsiz), record: gerçek Claude + kaydet,"
+        " replay: sadece kayıttan (varsayılan)",
+    )
+    p_syn.add_argument("--out", type=Path, default=Path("eval/synthetic"), help="çalışma klasörü")
+    p_syn.add_argument("--reports", type=Path, default=Path("eval/reports"))
+
     p_learn = sub.add_parser(
         "learn", help="kararlardan skor modeli öğren (öneri üretir, otomatik uygulamaz)"
     )
@@ -443,6 +457,18 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "calibrate":
         return _calibrate(cfg, args.streamer, args.apply)
+
+    if args.command == "eval":
+        from clipper.evals.synthetic import run_all, write_report
+
+        key = secrets.anthropic_api_key.get_secret_value() if secrets.anthropic_api_key else None
+        results = asyncio.run(
+            run_all(cfg, args.out, only=args.only or (), llm_mode=args.llm, api_key=key, say=_say)
+        )
+        report = write_report(results, args.reports, args.llm)
+        passed = sum(r.ok for r in results)
+        _say(f"Sonuç: {passed}/{len(results)} senaryo geçti. Rapor: {report}")
+        return 0 if passed == len(results) else 1
 
     if args.command == "learn":
         return _learn(cfg, args.streamer)
