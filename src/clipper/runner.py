@@ -136,9 +136,31 @@ def live_extra_tasks(cfg: Config, llm: Any, live_transcriber: Any) -> Any:
     return factory
 
 
+RESTART = 3
+
+
+def already_running(host: str, port: int) -> bool:
+    """Is something (a previous `clipper run`) already listening on the panel port?"""
+    import socket
+
+    target = "127.0.0.1" if host in ("0.0.0.0", "::", "") else host
+    try:
+        with socket.create_connection((target, port), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
 async def run(
-    cfg: Config, secrets: Secrets, *, open_browser: bool = True, live: bool = True
+    cfg: Config,
+    secrets: Secrets,
+    *,
+    open_browser: bool = True,
+    live: bool = True,
+    env_path: Any = None,
+    config_path: Any = None,
 ) -> int:
+    """Returns 0, or RESTART when the panel asked for a restart (new `.env` values)."""
     import uvicorn
 
     from clipper.publish.runner import Publishing
@@ -170,14 +192,26 @@ async def run(
         extra=publishing.handle,
         extra_types=frozenset({"publish", "publish_status"}),
     )
+    from clipper.panel.vodjobs import VodTasks
+
+    requested: list[str] = []
     deps = PanelDeps(
         conn,
         cfg,
         secrets,
         facecam_suggester(conn, cfg, llm) if llm is not None else None,
         publish=kit,
+        env_path=env_path,
+        config_path=config_path,
+        vod=VodTasks(cfg),
+        system=lambda action: (requested.append(action), _stop_server()),
+        llm_active=llm is not None,
     )
     app = create_app(deps)
+
+    def _stop_server() -> None:
+        server.should_exit = True
+
     server = server_cls(
         uvicorn.Config(app, host=cfg.panel.host, port=cfg.panel.port, log_level="warning")
     )
@@ -246,4 +280,4 @@ async def run(
             live_transcriber.close()
         conn.close()
     print(f"Durduruldu. Bu oturumda {stats.done} iş bitti, {stats.failed} hata.", file=sys.stderr)
-    return 0
+    return RESTART if "restart" in requested else 0

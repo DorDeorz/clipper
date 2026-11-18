@@ -7,6 +7,7 @@ is held across an await).
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import ipaddress
 import json
@@ -22,11 +23,12 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from clipper import __version__, jobs
-from clipper.config import Config, Secrets
+from clipper.config import Config, Secrets, load_secrets
 from clipper.feedback import REJECT_REASONS
 from clipper.log import get_logger, ring_buffer
-from clipper.panel import api
+from clipper.panel import api, setup
 from clipper.panel.api import PanelError
+from clipper.panel.vodjobs import VodError, VodTasks, detect_source, kick_vods
 from clipper.publish import scheduler
 from clipper.publish.oauth import PLATFORMS, OAuthError
 from clipper.publish.wiring import PublishKit
@@ -66,6 +68,13 @@ class PanelDeps:
     facecam_suggest: Callable[[int], Awaitable[dict[str, Any]]] | None = None
     # Publishing (Faz 7): OAuth + publishers. None → approve only records the decision.
     publish: PublishKit | None = None
+    # Faz 9 (kullanıcı dostu panel): .env path, VOD imports, restart/shutdown hooks.
+    env_path: Path | None = None
+    config_path: Path | None = None
+    vod: VodTasks | None = None
+    system: Callable[[str], None] | None = None  # "restart" | "shutdown"
+    llm_active: bool = False
+    restart_needed: bool = False
 
 
 def _auth_ok(header: str | None, password: str) -> bool:
@@ -172,6 +181,132 @@ def create_app(deps: PanelDeps) -> FastAPI:
             return None
         pct = round(100.0 * used / total, 1) if total else 0.0
         return {"percent": pct, "high": pct >= cfg.retention.disk_high_percent}
+
+    # ---- setup screen ------------------------------------------------------------------
+
+    def _env_path() -> Path:
+        if deps.env_path is None:
+            raise PanelError(".env yolu bilinmiyor", 503)
+        return deps.env_path
+
+    def _reload_secrets() -> None:
+        deps.secrets = load_secrets(_env_path())
+        if deps.publish is not None:
+            from clipper.publish.oauth import providers
+            from clipper.util.crypto import SecretBox
+
+            key = deps.secrets.clipper_secret_key
+            deps.publish.oauth.box = SecretBox(key.get_secret_value()) if key else None
+            deps.publish.oauth.providers = providers(cfg, deps.secrets)
+
+    @app.get("/api/setup")
+    async def setup_status() -> dict[str, Any]:
+        sec = deps.secrets
+        return {
+            "env": setup.env_status(sec),
+            "env_path": str(deps.env_path) if deps.env_path else None,
+            "first_run": sec.anthropic_api_key is None or sec.clipper_secret_key is None,
+            "llm_active": deps.llm_active,
+            "restart_needed": deps.restart_needed,
+            "can_restart": deps.system is not None,
+        }
+
+    @app.post("/api/setup/env")
+    async def setup_env(request: Request) -> dict[str, Any]:
+        body = await _body(request)
+        values = body.get("values")
+        if not isinstance(values, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in values.items()
+        ):
+            raise PanelError("values bir metin sözlüğü olmalı")
+        try:
+            changed = setup.update_env(_env_path(), values)
+        except (setup.SetupError, ValueError) as exc:
+            raise PanelError(str(exc)) from exc
+        if changed:
+            _reload_secrets()
+            deps.restart_needed = True
+            log.info("env updated", extra={"keys": changed})  # names only, never values
+        return {"ok": True, "changed": changed}
+
+    @app.post("/api/setup/secret-key")
+    async def setup_secret_key() -> dict[str, Any]:
+        n = len(api.list_accounts(conn))
+        try:
+            created = setup.generate_secret_key(_env_path(), deps.secrets, n)
+        except setup.SetupError as exc:
+            raise PanelError(str(exc)) from exc
+        if created:
+            _reload_secrets()
+        return {"ok": True, "created": created}
+
+    @app.get("/api/setup/checks")
+    async def setup_checks() -> list[dict[str, str]]:
+        return await setup.checks(cfg, deps.secrets)
+
+    @app.post("/api/setup/shortcut")
+    async def setup_shortcut() -> dict[str, Any]:
+        import subprocess
+
+        from clipper import autostart
+
+        env = _env_path()
+        config = deps.config_path or (env.parent / "config.yaml")
+        plan = autostart.shortcut_plan(env.parent, config, env)
+        try:
+            await asyncio.to_thread(autostart.install, plan)
+        except (OSError, subprocess.CalledProcessError) as exc:
+            raise PanelError(f"kısayol oluşturulamadı: {exc}", 500) from exc
+        return {"ok": True, "message": plan.hint}
+
+    @app.post("/api/system/{action}")
+    async def system_action(action: str) -> dict[str, Any]:
+        if action not in ("restart", "shutdown"):
+            raise PanelError("bilinmeyen işlem", 404)
+        if deps.system is None:
+            raise PanelError("bu modda kullanılamıyor", 503)
+        deps.system(action)
+        return {"ok": True}
+
+    # ---- new VOD import -----------------------------------------------------------------
+
+    def _vod() -> VodTasks:
+        if deps.vod is None:
+            raise PanelError("VOD ekleme bu modda kapalı", 503)
+        return deps.vod
+
+    @app.get("/api/vod")
+    async def vod_list() -> list[dict[str, Any]]:
+        return _vod().list()
+
+    @app.post("/api/vod")
+    async def vod_start(request: Request) -> dict[str, Any]:
+        body = await _body(request)
+        text = str(body.get("text") or "").strip()
+        if not text:
+            raise PanelError("link, id ya da dosya yolu gerekli")
+        source = body.get("source") or detect_source(text)
+        if source not in ("kick", "twitch", "youtube", "file"):
+            raise PanelError("platform anlaşılamadı; listeden seç")
+        try:
+            task = _vod().start(
+                source,
+                text,
+                streamer=(str(body.get("streamer") or "").strip() or None),
+                chat=(str(body.get("chat") or "").strip() or None),
+            )
+        except VodError as exc:
+            raise PanelError(str(exc)) from exc
+        return task.view()
+
+    @app.get("/api/kick-vods")
+    async def kick_vod_list(channel: str) -> list[dict[str, Any]]:
+        if not channel.strip():
+            raise PanelError("kanal adı gerekli")
+        try:
+            return await kick_vods(cfg, channel)
+        except Exception as exc:  # network / Cloudflare / parse: show it, don't 500
+            raise PanelError(f"Kick VOD listesi alınamadı: {exc}", 502) from exc
 
     # ---- learned model (4.9 Kademe 2) --------------------------------------------------
 

@@ -29,6 +29,20 @@ uv run clipper doctor             # ffmpeg, GPU, anahtarlar ve disk kontrolü
 uv run clipper run                # paneli açar: http://127.0.0.1:8765
 ```
 
+### Kolay yol: panel ve masaüstü kısayolu
+
+```bash
+uv run clipper install-shortcut   # masaüstüne "Clipper" kısayolu koyar (bir kez)
+```
+
+Sonra kısayola çift tıkla; terminal açılmaz, panel tarayıcıda açılır. Zaten çalışıyorsa sadece
+paneli açar.
+- **Kurulum** sekmesi: `.env` anahtarlarını gir (değerler tarayıcıya geri gönderilmez), gizli
+  anahtarı "Üret" ile oluştur, sistem kontrolünü çalıştır, "Yeniden başlat" ile uygula.
+- **Yeni yayın** sekmesi: Kick, Twitch veya YouTube VOD linkini yapıştır ya da Kick kanal adını
+  yazıp listeden seç. İlerleme kartta görünür, adaylar Klipler sekmesine düşer.
+- Sağ üstteki **Kapat** düğmesi programı kapatır.
+
 Yayıncıları paneldeki **Yayıncılar** sekmesinden ekle. Her yayıncı için sırasıyla:
 1. Facecam alanını karenin üstüne çiz.
 2. Yazılı iznin varsa "Yayıncı izni var" kutusunu işaretle. **İzni olmayan yayıncının klibi hiçbir

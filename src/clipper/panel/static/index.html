@@ -10,16 +10,60 @@
   <header>
     <h1>clipper</h1>
     <nav id="tabs">
+      <button data-tab="vod">Yeni yayın</button>
       <button data-tab="live">Canlı</button>
       <button data-tab="clips" class="active">Klipler <span id="review-count" class="count"></span></button>
       <button data-tab="pubs">Yayınlar</button>
       <button data-tab="streamers">Yayıncılar</button>
       <button data-tab="accounts">Hesaplar</button>
       <button data-tab="costs">Maliyet &amp; Log</button>
+      <button data-tab="setup">Kurulum</button>
     </nav>
     <div id="queue" class="muted"></div>
+    <button id="quit" class="bad" title="clipper'ı kapat">Kapat</button>
   </header>
   <main>
+    <div id="banner" class="banner" hidden></div>
+
+    <section id="tab-vod" hidden>
+      <form id="vod-form">
+        <h2>Bitmiş bir yayından klip çıkar</h2>
+        <label>Yayın linki, VOD id'si ya da bilgisayardaki video dosyasının yolu
+          <input name="text" placeholder="https://www.twitch.tv/videos/… · https://youtu.be/… · kick.com/…/videos/…"></label>
+        <div class="row">
+          <label>Platform <select name="source">
+            <option value="">otomatik</option><option value="kick">Kick</option>
+            <option value="twitch">Twitch</option><option value="youtube">YouTube</option>
+            <option value="file">Dosya</option></select></label>
+          <label class="file-only">Yayıncı adı <input name="streamer"></label>
+          <label class="file-only">Chat dosyası (opsiyonel) <input name="chat"></label>
+        </div>
+        <div class="row"><button type="submit" class="ok">Klip çıkar</button>
+          <span class="muted">İndirme ve analiz arka planda sürer; klipler hazır oldukça Klipler sekmesine düşer.</span></div>
+      </form>
+      <h2>Kick kanalının VOD'ları</h2>
+      <div class="row"><input id="kick-channel" placeholder="kanal adı"><button id="kick-list">Listele</button></div>
+      <table id="kick-table" class="grid"></table>
+      <h2>İşlenenler</h2>
+      <div id="vod-tasks" class="cards"></div>
+    </section>
+
+    <section id="tab-setup" hidden>
+      <h2>Anahtarlar (.env)</h2>
+      <p class="muted" id="env-path"></p>
+      <form id="env-form"></form>
+      <div class="row" id="restart-row" hidden>
+        <span class="warn">Yeni anahtarlar yeniden başlatınca devreye girer.</span>
+        <button id="restart" class="ok">Yeniden başlat</button>
+      </div>
+      <h2>Masaüstü kısayolu</h2>
+      <div class="row"><button id="shortcut">Masaüstüne "Clipper" kısayolu ekle</button>
+        <span class="muted">Çift tıklayınca terminal açılmadan panel açılır.</span></div>
+      <h2>Sistem kontrolü</h2>
+      <div class="row"><button id="run-checks">Kontrol et</button></div>
+      <table id="check-table" class="grid"></table>
+    </section>
+
     <section id="tab-live" hidden>
       <div id="live-now" class="cards live-now"></div>
       <div class="row">
