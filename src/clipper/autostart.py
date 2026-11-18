@@ -12,6 +12,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from clipper.util.proc import no_window
+
 TASK_NAME = "clipper"
 UNIT_NAME = "clipper.service"
 
@@ -103,14 +105,14 @@ def install(p: Plan, *, dry_run: bool = False) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(body, encoding="utf-8", newline="")
     for cmd in p.commands:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        subprocess.run(cmd, check=True, capture_output=True, text=True, **no_window())
 
 
 def uninstall(workdir: Path) -> str:
     if sys.platform == "win32":
         subprocess.run(
             ["schtasks", "/Delete", "/TN", TASK_NAME, "/F"],
-            check=True, capture_output=True, text=True,
+            check=True, capture_output=True, text=True, **no_window(),
         )  # fmt: skip
         (workdir.resolve() / "data" / "clipper-autostart.cmd").unlink(missing_ok=True)
         return f"'{TASK_NAME}' görevi silindi."

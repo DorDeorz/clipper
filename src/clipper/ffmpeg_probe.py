@@ -8,6 +8,8 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from clipper.util.proc import no_window
+
 
 @dataclass(frozen=True, slots=True)
 class ToolResult:
@@ -19,7 +21,7 @@ class ToolResult:
 async def run_tool(*args: str, timeout: float = 20.0) -> ToolResult:
     """Run an executable without a shell and capture its output."""
     proc = await asyncio.create_subprocess_exec(
-        *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, **no_window()
     )
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)

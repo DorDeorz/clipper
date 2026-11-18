@@ -389,7 +389,9 @@ def _restart(argv: Sequence[str] | None) -> None:
     if "--no-browser" not in args:
         args.append("--no-browser")  # the open tab reconnects by itself
     print("Yeniden başlatılıyor...", file=sys.stderr)
-    subprocess.Popen([sys.executable, "-m", "clipper", *args])
+    from clipper.util.proc import no_window
+
+    subprocess.Popen([sys.executable, "-m", "clipper", *args], **no_window())
 
 
 def _ensure_utf8_output() -> None:
