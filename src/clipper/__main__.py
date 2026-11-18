@@ -95,6 +95,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_kv = sub.add_parser("kick-vods", help="Kick kanalının bitmiş VOD'larını listele")
     p_kv.add_argument("slug", help="kanal adı (kick.com/<slug>)")
 
+    p_tr = sub.add_parser("test-render", help="örnek videodan 9:16 render denemesi")
+    p_tr.add_argument(
+        "--layout", choices=["stack", "blur", "center"], action="append", help="(varsayılan: üçü)"
+    )
+    p_tr.add_argument("--out", type=Path, help="çıktı klasörü (varsayılan: data/test-render)")
+
+    p_fc = sub.add_parser("facecam", help="yayıncının facecam konumunu Claude ile öner")
+    p_fc.add_argument("streamer", help="yayıncı adı ya da kanal")
+    p_fc.add_argument("--apply", action="store_true", help="öneriyi kaydet ve düzeni stack yap")
+
     p_chat = sub.add_parser("chat-import", help="chat dosyasını ortak jsonl biçimine çevir")
     p_chat.add_argument("input", type=Path, help="TwitchDownloader .json veya .jsonl")
     p_chat.add_argument("output", type=Path, help="çıktı .jsonl veya .jsonl.gz")
@@ -369,6 +379,26 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _print_clips(conn, args.session_id, args.all)
         finally:
             conn.close()
+
+    if args.command == "test-render":
+        from clipper.cli_render import test_render
+
+        out = args.out or cfg.paths.data_dir / "test-render"
+        try:
+            return asyncio.run(test_render(cfg, args.layout or ["stack", "blur", "center"], out))
+        except MediaError as exc:
+            print(f"Hata: {exc}", file=sys.stderr)
+            return 1
+
+    if args.command == "facecam":
+        from clipper.cli_render import facecam
+        from clipper.llm.client import LLMError
+
+        try:
+            return asyncio.run(facecam(cfg, secrets, args.streamer, args.apply))
+        except (LLMError, MediaError) as exc:
+            print(f"Hata: {exc}", file=sys.stderr)
+            return 1
 
     if args.command == "vod":
         try:

@@ -18,6 +18,7 @@ class PathsConfig(_Strict):
     data_dir: Path = Path("./data")
     ffmpeg: str = "ffmpeg"
     ffprobe: str = "ffprobe"
+    fonts_dir: Path = Path("./assets/fonts")
 
 
 class MonitoringConfig(_Strict):

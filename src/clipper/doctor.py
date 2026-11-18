@@ -65,13 +65,14 @@ async def run_checks(cfg: Config, secrets: Secrets) -> list[Check]:
         else:
             checks.append(Check("NVENC", Status.FAIL, "ne h264_nvenc ne libx264 var"))
 
+    checks.append(_check_fonts(cfg.paths.fonts_dir))
     checks.append(await _check_cuda())
     checks.append(_check_whisper())
 
     checks.append(
         Check("ANTHROPIC_API_KEY", Status.OK, "tanımlı")
         if secrets.anthropic_api_key
-        else Check("ANTHROPIC_API_KEY", Status.WARN, "tanımlı değil (Faz 3'te gerekecek)")
+        else Check("ANTHROPIC_API_KEY", Status.WARN, "tanımlı değil (LLM işleri çalışmaz)")
     )
     checks.append(_check_secret_key(secrets))
     checks.append(_check_disk(cfg.paths.data_dir))
@@ -166,6 +167,17 @@ def format_report(checks: list[Check], color: bool) -> str:
     else:
         lines.append("\nHer şey yeşil.")
     return "\n".join(lines)
+
+
+def _check_fonts(fonts_dir: Path) -> Check:
+    fonts = sorted(p.name for p in fonts_dir.glob("*.[ot]tf")) if fonts_dir.is_dir() else []
+    if fonts:
+        return Check("Altyazı fontu", Status.OK, ", ".join(fonts[:3]))
+    return Check(
+        "Altyazı fontu",
+        Status.WARN,
+        f"{fonts_dir} boş; sistem fontu kullanılacak (assets/fonts/README.md)",
+    )
 
 
 def doctor(cfg: Config, secrets: Secrets) -> int:

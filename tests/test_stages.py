@@ -113,11 +113,11 @@ def test_full_pipeline(session: int, tmp_path: Path, conn: sqlite3.Connection) -
     stats = _run(conn, cfg, fake, whisper)
 
     assert stats.dead == 0 and stats.failed == 0
-    assert stats.by_type == {"cut": 3, "transcribe": 3, "prefilter": 3, "judge": 2}
+    assert stats.by_type == {"cut": 3, "transcribe": 3, "prefilter": 3, "judge": 2, "render": 1}
     assert len(whisper.calls) == 3 and all(c.endswith("raw.wav") for c in whisper.calls)
     statuses = dict(conn.execute("SELECT id, status FROM candidates ORDER BY peak_ts").fetchall())
     first, second, third = sorted(statuses, key=lambda i: i)
-    assert statuses[second] == "judged"
+    assert statuses[second] == "rendered"
     assert statuses[first] == "rejected" and statuses[third] == "rejected"
 
     clip = conn.execute("SELECT * FROM clips WHERE candidate_id = ?", (second,)).fetchone()
@@ -136,7 +136,11 @@ def test_full_pipeline(session: int, tmp_path: Path, conn: sqlite3.Connection) -
     assert "[8.0] oha ne oldu" in user and "## Chat" in user and "## Ses enerjisi" in user
     usage = conn.execute("SELECT purpose, COUNT(*) FROM llm_usage GROUP BY purpose").fetchall()
     assert dict(usage) == {"prefilter": 3, "judge": 2}
-    assert jobs.counts(conn) == {"done": 11}
+    assert jobs.counts(conn) == {"done": 12}
+    assert Path(clip["final_path"]).is_file() and Path(clip["thumb_path"]).is_file()
+    ass = (Path(clip["raw_path"]).parent / "clip.ass").read_text(encoding="utf-8")
+    assert "OHA" in ass and "İNANILMAZ" in ass  # words in [start, end], tr_upper
+    assert "VE O AN GELDİ" in ass  # hook
 
 
 def test_hourly_cap(session: int, tmp_path: Path, conn: sqlite3.Connection) -> None:
@@ -150,7 +154,9 @@ def test_hourly_cap(session: int, tmp_path: Path, conn: sqlite3.Connection) -> N
 
     fake = FakeAnthropic([reply] * 6)
     _run(conn, cfg, fake, FakeWhisper())
-    judged = conn.execute("SELECT COUNT(*) FROM candidates WHERE status = 'judged'").fetchone()[0]
+    judged = conn.execute(
+        "SELECT COUNT(*) FROM candidates WHERE status IN ('judged', 'rendered')"
+    ).fetchone()[0]
     assert judged == 1
     reasons = [
         json.loads(r[0])["judge"]["reason"]
