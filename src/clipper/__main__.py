@@ -115,6 +115,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_cal.add_argument("streamer", help="yayıncı adı ya da kanal")
     p_cal.add_argument("--apply", action="store_true", help="öneriyi yayıncıya kaydet")
 
+    p_learn = sub.add_parser(
+        "learn", help="kararlardan skor modeli öğren (öneri üretir, otomatik uygulamaz)"
+    )
+    p_learn.add_argument("--streamer", help="sadece bu yayıncının raporunu göster")
+    p_clean = sub.add_parser("cleanup", help="saklama politikasına göre eski dosyaları sil")
+    p_clean.add_argument("--dry-run", action="store_true", help="silmeden ne silineceğini göster")
+    p_auto = sub.add_parser(
+        "install-autostart", help="oturum açınca clipper'ı başlat (Windows görev / systemd)"
+    )
+    p_auto.add_argument("--dry-run", action="store_true", help="sadece ne yapılacağını göster")
+    sub.add_parser("uninstall-autostart", help="otomatik başlatmayı kaldır")
+
     p_chat = sub.add_parser("chat-import", help="chat dosyasını ortak jsonl biçimine çevir")
     p_chat.add_argument("input", type=Path, help="TwitchDownloader .json veya .jsonl")
     p_chat.add_argument("output", type=Path, help="çıktı .jsonl veya .jsonl.gz")
@@ -285,6 +297,50 @@ async def _kick_vods(cfg: Config, slug: str) -> int:
     return 0
 
 
+def _learn(cfg: Config, streamer: str | None) -> int:
+    from clipper.learn.service import NotEnoughData, learn
+
+    conn = db.open_db(cfg.db_path)
+    try:
+        sid = None
+        if streamer:
+            row = conn.execute(
+                "SELECT id FROM streamers WHERE display_name = ? OR channel = ?",
+                (streamer, streamer),
+            ).fetchone()
+            if row is None:
+                print(f"Hata: yayıncı bulunamadı: {streamer}", file=sys.stderr)
+                return 1
+            sid = str(row["id"])
+        try:
+            version, res = learn(conn, cfg)
+        except NotEnoughData as exc:
+            print(str(exc).capitalize() + ". Panelde klip onaylayıp reddettikçe veri birikir.")
+            return 1
+    finally:
+        conn.close()
+    part = res["streamers"].get(sid) if sid else res["global"]
+    if sid and part is None:
+        print(f"Model v{version} kaydedildi; bu yayıncı için yeterli karar yok (global model).")
+        part = res["global"]
+    rep, sug = part["report"], part["suggest"]
+    print(f"Model v{version}: {res['decisions']} karar ({res['rows']} örnek).")
+    for name, label in (("pre", "LLM öncesi"), ("full", "LLM skorlu")):
+        m = rep.get(name)
+        if m:
+            print(f"  {label} test ({m['n']} karar): " + ", ".join(
+                f"{k}={v}" for k, v in m.items() if k != "n"
+            ))  # fmt: skip
+    print(f"  Önerilen ağırlıklar: {sug['weights']}, eşik {sug['threshold']}")
+    if "min_keep_score" in sug:
+        print(
+            f"  Önerilen min_keep_score {sug['min_keep_score']}, "
+            f"auto_publish_min_score {sug['auto_publish_min_score']}"
+        )
+    print("Öneriler otomatik uygulanmadı: panelde Maliyet & Log → Öğrenme → 'Öneriyi uygula'.")
+    return 0
+
+
 def _calibrate(cfg: Config, streamer: str, apply: bool) -> int:
     import json as _json
 
@@ -364,6 +420,49 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "calibrate":
         return _calibrate(cfg, args.streamer, args.apply)
+
+    if args.command == "learn":
+        return _learn(cfg, args.streamer)
+
+    if args.command == "cleanup":
+        from clipper.retention import cleanup
+
+        conn = db.open_db(cfg.db_path)
+        try:
+            rep = cleanup(conn, cfg, dry_run=args.dry_run)
+        finally:
+            conn.close()
+        verb = "silinecek" if args.dry_run else "silindi"
+        print(
+            f"Disk: %{rep.disk_percent}{' (agresif temizlik)' if rep.aggressive else ''}. "
+            f"{rep.segments} segment, {rep.raw} ham kesit, {rep.final} final klip {verb} "
+            f"({rep.freed_bytes / 1e6:.1f} MB)."
+        )
+        return 0
+
+    if args.command in ("install-autostart", "uninstall-autostart"):
+        import subprocess
+
+        from clipper import autostart
+
+        try:
+            if args.command == "uninstall-autostart":
+                print(autostart.uninstall(Path.cwd()))
+                return 0
+            plan = autostart.plan(Path.cwd(), args.config, args.env)
+            autostart.install(plan, dry_run=args.dry_run)
+        except (OSError, subprocess.CalledProcessError) as exc:
+            detail = getattr(exc, "stderr", None) or exc
+            print(f"Hata: otomatik başlatma ayarlanamadı: {detail}", file=sys.stderr)
+            return 1
+        if args.dry_run:
+            for path, body in plan.files.items():
+                print(f"--- {path}\n{body}")
+            for cmd in plan.commands:
+                print("$ " + " ".join(cmd))
+            return 0
+        print(plan.hint)
+        return 0
 
     if args.command == "run":
         from clipper.panel.app import PanelConfigError

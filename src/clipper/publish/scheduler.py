@@ -17,7 +17,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
 
-from clipper import jobs
+from clipper import jobs, settings
 from clipper.config import Config
 from clipper.log import get_logger
 
@@ -193,11 +193,12 @@ def retry(
     enqueue_publish(conn, pub_id, now)
 
 
-def auto_publish_ok(cfg: Config, owner: sqlite3.Row) -> bool:
+def auto_publish_ok(cfg: Config, owner: sqlite3.Row, min_score: float | None = None) -> bool:
     """`auto_publish=1` and score ≥ `auto_publish_min_score` and clean flags."""
     if not (owner["auto_publish"] and owner["permission_ok"]):
         return False
-    if owner["llm_score"] is None or owner["llm_score"] < cfg.publish.auto_publish_min_score:
+    floor = cfg.publish.auto_publish_min_score if min_score is None else min_score
+    if owner["llm_score"] is None or owner["llm_score"] < floor:
         return False
     llm: dict[str, Any] = json.loads(owner["llm_json"]) if owner["llm_json"] else {}
     flags = (llm.get("judge") or {}).get("flags") or {}
@@ -215,7 +216,10 @@ def maybe_auto_publish(
     """After a render: auto-approve and schedule when the rule holds. Auto approvals are
     not written to `feedback` (they are not a human decision)."""
     owner = clip_owner(conn, clip_id)
-    if owner["review"] != "pending" or not auto_publish_ok(cfg, owner):
+    floor = settings.number(
+        conn, settings.AUTO_PUBLISH_MIN_SCORE, cfg.publish.auto_publish_min_score
+    )
+    if owner["review"] != "pending" or not auto_publish_ok(cfg, owner, floor):
         return False
     targets = json.loads(owner["publish_targets"]) if owner["publish_targets"] else []
     if not targets:

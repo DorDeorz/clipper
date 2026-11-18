@@ -97,6 +97,20 @@ def _quiet_server_cls() -> Any:
     return QuietServer
 
 
+async def retention_loop(conn: sqlite3.Connection, cfg: Config, stop: asyncio.Event) -> None:
+    """Faz 8: periodic disk cleanup (retention policy) while `clipper run` is up."""
+    from clipper.retention import cleanup
+
+    every = max(60.0, cfg.retention.check_every_minutes * 60.0)
+    while not stop.is_set():
+        try:
+            cleanup(conn, cfg)
+        except Exception as exc:  # cleanup must never stop the supervisor
+            log.warning("cleanup failed", extra={"error": str(exc)})
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(stop.wait(), timeout=every)
+
+
 def live_extra_tasks(cfg: Config, llm: Any, live_transcriber: Any) -> Any:
     """Content path tasks for each live session (ROADMAP 4.3b), when available."""
     from clipper.content.scanner import ContentScanner
@@ -186,7 +200,10 @@ async def run(
         finally:
             stop.set()
 
-    workers = asyncio.create_task(run_forever(conn, stages.handle, stop, pools=pools))
+    workers = asyncio.create_task(
+        run_forever(conn, stages.handle, stop, pools=pools, concurrency=cfg.workers.model_dump())
+    )
+    housekeeping = asyncio.create_task(retention_loop(conn, cfg, stop), name="retention")
     live_transcriber = None
     watcher_task: asyncio.Task[None] | None = None
     if live:
@@ -221,6 +238,7 @@ async def run(
             await announcer
         if watcher_task is not None:
             await asyncio.gather(watcher_task, return_exceptions=True)
+        await asyncio.gather(housekeeping, return_exceptions=True)
         stats = await workers
         await client.aclose()
         transcriber.close()

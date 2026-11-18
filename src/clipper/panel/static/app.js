@@ -101,7 +101,10 @@ async function loadStatus() {
   state.status = s;
   document.getElementById("review-count").textContent = s.review_count || "";
   const q = Object.entries(s.queue).map(([k, v]) => `${k}=${v}`).join("  ");
-  document.getElementById("queue").textContent = q ? `Kuyruk: ${q}` : "Kuyruk boş";
+  const disk = s.disk && s.disk.high ? ` · Disk %${s.disk.percent} dolu: agresif temizlik açık` : "";
+  const qe = document.getElementById("queue");
+  qe.textContent = (q ? `Kuyruk: ${q}` : "Kuyruk boş") + disk;
+  qe.classList.toggle("warn", Boolean(disk));
   document.getElementById("fc-suggest").hidden = !s.facecam_suggest;
 }
 
@@ -392,12 +395,49 @@ async function loadCosts() {
     table(document.getElementById("cost-purposes"), ["Amaç", "Model", "USD", "Çağrı"],
       c.purposes.map((p) => h("tr", {}, h("td", {}, p.purpose), h("td", {}, p.model), h("td", {}, p.usd), h("td", {}, p.calls))));
   }
+  loadLearn();
   const logs = await act(() => call("GET", "/api/logs"));
   if (logs) {
     document.getElementById("log-lines").textContent = logs.slice().reverse()
       .map((l) => `${(l.ts || "").slice(0, 19)} ${l.level || ""} ${l.logger || ""} ${l.msg || ""}`)
       .join("\n");
   }
+}
+
+const fmtWeights = (w) => Object.entries(w || {}).map(([k, v]) => `${k} ${v}`).join(", ");
+
+async function loadLearn() {
+  const d = await act(() => call("GET", "/api/learn"));
+  const box = document.getElementById("learn");
+  if (!d) return;
+  const head = h("p", { class: "muted" },
+    `${d.decisions} karar birikti (öğrenme için en az ${d.min_decisions}). ` +
+    "Yeni model için: uv run clipper learn");
+  if (!d.versions.length) { box.replaceChildren(head); return; }
+  const cards = d.versions.map((v) => {
+    const pre = v.report.pre || {}, full = v.report.full || {};
+    const applied = d.applied === v.version;
+    const btn = applied
+      ? h("button", { class: "bad", onclick: async () => {
+        if (await act(() => call("POST", "/api/learn/undo"), "Geri alındı.")) loadLearn();
+      } }, "Geri al")
+      : h("button", { class: "ok", onclick: async () => {
+        if (await act(() => call("POST", `/api/learn/${v.version}/apply`), "Öneri uygulandı.")) loadLearn();
+      } }, "Öneriyi uygula");
+    return h("article", { class: "card" },
+      h("div", { class: "head" }, h("strong", {}, `v${v.version}${applied ? " (uygulandı)" : ""}`),
+        h("span", { class: "muted" }, `${v.decisions} karar · ${new Date(v.created_at * 1000).toLocaleString("tr-TR")}`)),
+      h("p", {}, `Test AUC: model ${pre.auc ?? "-"} / mevcut dedektör ${pre.auc_det_score ?? "-"}` +
+        ` · LLM skorlu ${full.auc ?? "-"}`),
+      h("p", { class: "muted" }, `Ağırlıklar: ${fmtWeights(v.current.weights)} → ${fmtWeights(v.suggest.weights)}`),
+      h("p", { class: "muted" }, `Eşik ${v.current.threshold} → ${v.suggest.threshold} · ` +
+        `min_keep ${v.current.min_keep_score} → ${v.suggest.min_keep_score} · ` +
+        `otomatik yayın ${v.current.auto_publish_min_score} → ${v.suggest.auto_publish_min_score}`),
+      Object.keys(v.streamers).length
+        ? h("p", { class: "muted" }, `Yayıncıya özel model: ${Object.keys(v.streamers).length} yayıncı`) : null,
+      h("div", { class: "row" }, btn));
+  });
+  box.replaceChildren(head, h("div", { class: "cards" }, ...cards));
 }
 
 // ---- streamers + facecam picker -----------------------------------------------------

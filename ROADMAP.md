@@ -757,14 +757,21 @@ Reddet/onay kararları `feedback` tablosuna yazılır (bkz. 4.9). Reddet butonu 
 **Bitti sayılması için:** Panelden onaylanan bir klip test hesaplarında YouTube'a (unlisted), Instagram'a, X'e yayınlanıyor, TikTok inbox'a düşüyor. Linkler panelde görünüyor.
 
 ### Faz 8 — Sağlamlaştırma ve kalibrasyon
-- [ ] Çoklu yayıncı eşzamanlılığı (aynı anda 3–5 kanal). Kaynak limitleri (aynı anda max N render).
-- [ ] Saklama politikası: segmentler 15 dk, ham kesitler 7 gün, final klipler 30 gün (config). Disk %85 dolunca agresif temizlik + uyarı.
-- [ ] (r3) **Öğrenilmiş skor modeli** (4.9 Kademe 2): `clipper learn`, numpy logistic regression, global + yayıncı bazlı, zaman bazlı test raporu, panelde "öneriyi uygula / geri al", versiyonlu ağırlıklar. ≥200 karar birikmeden komut "yetersiz veri" der ve çıkar.
+- [x] Çoklu yayıncı eşzamanlılığı (aynı anda 3–5 kanal). Kaynak limitleri (aynı anda max N render).
+  - Not: Canlı session sınırı `monitoring.max_concurrent_sessions` (5, Faz 6). Havuz başına eşzamanlı iş `workers` (cpu=2 kesim+render, gpu=1, io=4, pub=2). Gerçek 3–5 kanal yükü test aşamasında ölçülecek.
+- [x] Saklama politikası: segmentler 15 dk, ham kesitler 7 gün, final klipler 30 gün (config). Disk %85 dolunca agresif temizlik + uyarı.
+  - Not: `retention.py`, `clipper run` içinde 30 dk'da bir ve `clipper cleanup [--dry-run]`. Bitmiş session'ın segmentleri `buffer_minutes` sonra silinir (bekleyen kesim / session transkripti varsa beklenir). Yayını bekleyen final klip silinmez. Disk eşiği aşılınca 1 / 7 günlük süreler, log uyarısı ve panel başlığında uyarı.
+- [x] (r3) **Öğrenilmiş skor modeli** (4.9 Kademe 2): `clipper learn`, numpy logistic regression, global + yayıncı bazlı, zaman bazlı test raporu, panelde "öneriyi uygula / geri al", versiyonlu ağırlıklar. ≥200 karar birikmeden komut "yetersiz veri" der ve çıkar.
+  - Not: `learn/model.py` (Newton/IRLS, L2, yayıncı modeli global ağırlıklara `learn.shrinkage` ile çekilir), `learn/service.py`. İki model: `pre` (sadece dedektör özellikleri; LLM öncesi kapı) ve `full` (LLM skorları dahil; `min_keep_score` / `auto_publish_min_score` önerisi). LLM'in elediği, insanın görmediği adaylar yarım ağırlıkla negatif örnek. Rapor: son %20 karar test; AUC, precision@k, log loss ve mevcut `det_score` ile karşılaştırma. Sürümler `data/models/learned/vN.json`. "Öneriyi uygula": yayıncıların `detector_overrides`'ına ağırlık/eşik, `settings` tablosuna skor eşikleri (şema v4); önceki değerler saklanır, "Geri al" onları yazar. LLM öncesi kapı sadece bir öneri uygulanmışken çalışır (olasılık < 0.05 → LLM'e gitmez, > 0.95 → ön elemeyi atlar).
 - [ ] (r3) **Performans sinyali** (4.9 Kademe 3, opsiyonel): `clip_stats` günlük çekim, izlenme hedefli ikinci model, panelde "hangi sinyal izlenme getiriyor" raporu
+  - Not (2026-11-18): Ertelendi. İstatistik okumak ek scope ister (YouTube `youtube.readonly`, Instagram `instagram_manage_insights`, X okuma ücreti) ve yayınlanmış klip birikmeden model kurulamaz. Gerçek yayınlar başladıktan sonra eklenecek; tablo (`clip_stats`) hazır.
 - [ ] (r3, v2 opsiyonel) **Judge'a görüntü kareleri**: kesit içinden en yüksek skorlu 4–6 an (ses/chat tepe noktaları) 512 px genişlikte JPEG olarak Sonnet 5.5'e eklenir. Kategori bazlı aç/kapa (`llm.vision_categories`; oyun kategorilerinde açık, "Just Chatting"/"Sohbet"te kapalı). Ölçüt: açık/kapalı A/B ile onay oranı farkına bak, fark yoksa kapat.
+  - Not: v2 maddesi, ilk sürümde yok. A/B ölçütü için önce görüntüsüz onay oranı verisi birikmeli.
 - [ ] (r3, v2 opsiyonel) **Bağlam özeti**: Haiku 5.5 her 5 dk'da son 5 dk transkript + önceki özetle "yayında şu ana kadar ne oldu" özetini (≤ 150 kelime) günceller. Özet judge ve ContentScanner prompt'larına eklenir. Maliyet ~$0.003/saat.
-- [ ] Başlangıçta otomatik çalışma: Windows'ta Task Scheduler kaydı oluşturan `clipper install-autostart`, Linux'ta systemd unit dosyası üreten komut
-- [ ] `README.md` (kurulum, `.env`, hesap bağlama adımları, sık hatalar)
+  - Not: v2 maddesi, ilk sürümde yok.
+- [x] Başlangıçta otomatik çalışma: Windows'ta Task Scheduler kaydı oluşturan `clipper install-autostart`, Linux'ta systemd unit dosyası üreten komut
+  - Not: `autostart.py`. Windows: `data/clipper-autostart.cmd` + `schtasks /Create /SC ONLOGON`. Linux: `~/.config/systemd/user/clipper.service` (Restart=on-failure); etkinleştirme komutu ekrana yazılır. `--dry-run` ve `uninstall-autostart` var.
+- [x] `README.md` (kurulum, `.env`, hesap bağlama adımları, sık hatalar)
 
 **Bitti sayılması için:** Sistem 7 gün kesintisiz çalışıyor, elle müdahale sadece onay/red.
 

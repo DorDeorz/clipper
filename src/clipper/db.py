@@ -155,8 +155,17 @@ ALTER TABLE publications ADD COLUMN run_at REAL;
 ALTER TABLE publications ADD COLUMN created_at REAL;
 """
 
+# Faz 8: small key/value store for values applied from the panel (learned model).
+SCHEMA_V4 = """
+CREATE TABLE settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at REAL NOT NULL
+);
+"""
+
 # Append new migrations to the end; never edit an applied one.
-MIGRATIONS: Sequence[str] = (SCHEMA_V1, SCHEMA_V2, SCHEMA_V3)
+MIGRATIONS: Sequence[str] = (SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4)
 
 
 def connect(
