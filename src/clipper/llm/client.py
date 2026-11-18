@@ -3,11 +3,14 @@ in `llm_usage`, and a monthly budget guard."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, TypeVar
 
 import anthropic
@@ -16,6 +19,7 @@ from pydantic import BaseModel, ValidationError
 from clipper.config import LLMConfig
 from clipper.llm.schemas import strict_schema
 from clipper.log import get_logger
+from clipper.util.fs import atomic_write_text
 
 log = get_logger("llm")
 T = TypeVar("T", bound=BaseModel)
@@ -50,6 +54,44 @@ FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
 class LLMError(Exception):
     """User-facing (Turkish)."""
+
+
+class LLMCacheMiss(Exception):
+    """Replay mode: the request is not in the cache. Deliberately not an LLMError, so the
+    pipeline does not swallow it as an ordinary failed candidate."""
+
+
+def request_key(kwargs: dict[str, Any], fallback: bool) -> str:
+    body = json.dumps({**kwargs, "_fallback": fallback}, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def _dump_response(resp: Any, model: str) -> dict[str, Any]:
+    u = resp.usage
+    details = getattr(resp, "stop_details", None)
+    return {
+        "model": str(getattr(resp, "model", model) or model),
+        "stop_reason": resp.stop_reason,
+        "stop_category": getattr(details, "category", None) if details else None,
+        "text": next((b.text for b in resp.content if getattr(b, "type", "") == "text"), ""),
+        "usage": {
+            "input_tokens": u.input_tokens,
+            "output_tokens": u.output_tokens,
+            "cache_read_input_tokens": int(getattr(u, "cache_read_input_tokens", 0) or 0),
+            "cache_creation_input_tokens": int(getattr(u, "cache_creation_input_tokens", 0) or 0),
+        },
+    }
+
+
+def _load_response(d: dict[str, Any]) -> Any:
+    cat = d.get("stop_category")
+    return SimpleNamespace(
+        model=d["model"],
+        stop_reason=d["stop_reason"],
+        stop_details=SimpleNamespace(category=cat) if cat else None,
+        content=[SimpleNamespace(type="text", text=d["text"])],
+        usage=SimpleNamespace(**d["usage"]),
+    )
 
 
 class LLMRefused(LLMError):
@@ -169,8 +211,24 @@ class LLMClient:
                 "format": {"type": "json_schema", "schema": strict_schema(schema)},
             },
         }
+        fallback = self.cfg.refusal_fallback and model in FALLBACK_MODELS
+        cache_file: Path | None = None
+        resp: Any = None
+        replayed = False
+        if self.cfg.cache_mode != "off":
+            cache_file = Path(self.cfg.cache_dir) / f"{request_key(kwargs, fallback)}.json"
+            if cache_file.is_file():
+                replayed = True
+                resp = _load_response(json.loads(cache_file.read_text(encoding="utf-8")))
+            elif self.cfg.cache_mode == "replay":
+                raise LLMCacheMiss(
+                    f"LLM replay: önbellekte yok ({purpose}, {cache_file.name}). Önce"
+                    " llm.cache_mode=record ile koş."
+                )
         try:
-            if self.cfg.refusal_fallback and model in FALLBACK_MODELS:
+            if resp is not None:
+                pass
+            elif fallback:
                 resp = await self.client.beta.messages.create(
                     betas=[FALLBACK_BETA], fallbacks="default", **kwargs
                 )
@@ -185,11 +243,17 @@ class LLMClient:
         except anthropic.APIConnectionError as exc:
             raise LLMError("Claude API'ye bağlanılamadı.") from exc
 
+        if cache_file is not None and not cache_file.is_file():
+            atomic_write_text(
+                cache_file, json.dumps(_dump_response(resp, model), ensure_ascii=False, indent=1)
+            )
         served_by = str(getattr(resp, "model", model) or model)
         u = resp.usage
         cache_read = int(getattr(u, "cache_read_input_tokens", 0) or 0)
         cache_write = int(getattr(u, "cache_creation_input_tokens", 0) or 0)
         usd = cost_usd(served_by, u.input_tokens, u.output_tokens, cache_read, cache_write)
+        if replayed:
+            usd = 0.0  # served from the record/replay cache: no API spend
         total["usd"] += usd
         total["in"] += u.input_tokens
         total["out"] += u.output_tokens

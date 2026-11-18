@@ -229,6 +229,11 @@ class TranscribeConfig(_Strict):
     compute_type: str = "auto"
     language: str = "tr"
     beam_size: int = 5
+    # TESTPLAN: "fake" reads `fake_path` (jsonl lines {"start","end","text"} in session time)
+    # instead of running whisper. `cache_dir` keeps transcripts by audio hash (eval reruns).
+    backend: Literal["whisper", "fake"] = "whisper"
+    fake_path: Path | None = None
+    cache_dir: Path | None = None
 
 
 class LLMConfig(_Strict):
@@ -241,6 +246,10 @@ class LLMConfig(_Strict):
     judge_effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
     # Server-side refusal fallback (beta) for models that support it.
     refusal_fallback: bool = True
+    # TESTPLAN record/replay: responses stored by request hash in `cache_dir`. In "replay"
+    # a request missing from the cache is an error (never silently goes to the real API).
+    cache_mode: Literal["off", "record", "replay"] = "off"
+    cache_dir: Path = Path("./eval/llm_cache")
 
 
 class RenderConfig(_Strict):

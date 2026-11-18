@@ -38,6 +38,9 @@ testpaths = ["tests"]
 addopts = "-m 'not online'"
 markers = [
     "online: tests that need real network access (run with -m online)",
+    "slow: long-running tests (skip with -m 'not slow')",
+    "integration: multi-component tests against local fake servers",
+    "security: security checks (TESTPLAN 8.2)",
 ]
 
 [tool.ruff]
