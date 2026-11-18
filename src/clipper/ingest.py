@@ -168,7 +168,9 @@ async def ingest_twitch_vod(
     chat_path = work / CHAT_FILE
     if not chat_path.is_file():
         say("Chat indiriliyor...")
-        messages = [m async for m in iter_vod_comments(gql, vod_id)]
+        messages = [
+            m async for m in iter_vod_comments(gql, vod_id, length_seconds=meta.length_seconds)
+        ]
         chatlog.write_jsonl(chat_path, messages)
         say(f"Chat: {len(messages)} mesaj")
     else:
