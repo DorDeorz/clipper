@@ -47,6 +47,9 @@ class ScoreRow:
     x: dict[str, float]
 
 
+BASELINE_BOOTSTRAP = 30  # samples learned unconditionally at the start
+
+
 class _Ewma:
     __slots__ = ("alpha", "mean", "n", "var")
 
@@ -188,8 +191,11 @@ class Detector:
 
         # Baseline is frozen during spikes so they don't inflate their own baseline. During
         # a raid it keeps adapting so the bigger audience slowly becomes the new normal.
-        if obs.chat_ok and (not hot or obs.suppressed) and self._event is None:
-            slow = hot  # only reachable while suppressed
+        # The first seconds always teach the baseline: a busy channel is "hot" against the
+        # empty starting baseline, and freezing it then would keep it hot forever.
+        warming = self._base["rate"].n < BASELINE_BOOTSTRAP
+        if obs.chat_ok and (warming or ((not hot or obs.suppressed) and self._event is None)):
+            slow = hot and not warming  # raid adaptation
             for k in ("rate", "uniq", "emote"):
                 self._base[k].update(x[k], slow=slow)
             if audio_x is not None:

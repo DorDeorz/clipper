@@ -286,12 +286,22 @@ _EVENT_RENDERERS = {
 }
 
 
+# Chat items that are not messages or events (system notices, placeholders).
+_OTHER_RENDERERS = frozenset({
+    "liveChatViewerEngagementMessageRenderer", "liveChatPlaceholderItemRenderer",
+    "liveChatModeChangeMessageRenderer", "liveChatBannerRenderer",
+    "liveChatTickerPaidMessageItemRenderer", "liveChatAutoModMessageRenderer",
+})  # fmt: skip
+UNKNOWN_PAGES_ALARM = 3  # consecutive pages of only unrecognised items -> layout changed
+
+
 @dataclass(slots=True)
 class LivePage:
     messages: list[ChatMessage]
     events: list[LiveEvent]
     continuation: str | None
     timeout_ms: int
+    unknown: int = 0  # chat items with no renderer we know (YouTube layout change?)
 
 
 def parse_live_response(data: dict[str, Any], default_timeout_ms: int = 5000) -> LivePage:
@@ -301,10 +311,14 @@ def parse_live_response(data: dict[str, Any], default_timeout_ms: int = 5000) ->
         return LivePage([], [], None, default_timeout_ms)  # stream/chat ended
     msgs: list[ChatMessage] = []
     events: list[LiveEvent] = []
+    unknown = 0
     for action in cont.get("actions") or []:
         item = (action.get("addChatItemAction") or {}).get("item")
         if not item:
             continue
+        if not any(k in _RENDERERS or k in _EVENT_RENDERERS or k in _OTHER_RENDERERS
+                   for k in item):  # fmt: skip
+            unknown += 1
         try:
             msg = renderer_to_message(item)
         except (KeyError, TypeError, ValueError) as exc:
@@ -332,7 +346,7 @@ def parse_live_response(data: dict[str, Any], default_timeout_ms: int = 5000) ->
                 break
         if token:
             break
-    return LivePage(msgs, events, token, timeout)
+    return LivePage(msgs, events, token, timeout, unknown)
 
 
 async def fetch_live_chat_page(
@@ -425,6 +439,7 @@ class YouTubeLiveChat:
         token = page.chat_continuation
         url = f"{self.cfg.base_url}/youtubei/v1/live_chat/get_live_chat"
         seen: set[tuple[float, str, str]] = set()
+        unknown_pages = 0
         while token and not stop.is_set():
             resp = await self.client.post(
                 url,
@@ -436,6 +451,12 @@ class YouTubeLiveChat:
             if resp.status_code != 200:
                 raise YouTubeParseError(f"YouTube canlı chat HTTP {resp.status_code}.")
             res = parse_live_response(resp.json())
+            unknown_pages = unknown_pages + 1 if res.unknown and not res.messages else 0
+            if unknown_pages >= UNKNOWN_PAGES_ALARM:
+                raise YouTubeParseError(
+                    "YouTube canlı chat yapısı değişmiş olabilir: mesajlar okunamıyor"
+                    " (tanınmayan öğe türleri). Güncelleme gerekebilir."
+                )
             for msg in res.messages:
                 key = (msg.ts, msg.user_id, msg.text)
                 if key in seen:
