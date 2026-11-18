@@ -16,6 +16,7 @@ from clipper.config import Config, ConfigError, Secrets, load_config, load_secre
 from clipper.detect.pipeline import DetectError
 from clipper.log import get_logger, setup_logging
 from clipper.media import MediaError
+from clipper.platforms.kick.api import KickError
 from clipper.platforms.twitch.gql import TwitchGQLError
 from clipper.platforms.youtube.innertube import YouTubeParseError
 from clipper.platforms.youtube.vod import YtDlpError
@@ -50,6 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     src = p_vod.add_mutually_exclusive_group(required=True)
     src.add_argument("--video", type=Path, help="yerel video dosyası")
     src.add_argument("--twitch-vod", metavar="ID", help="Twitch VOD id'si (anonim indirir)")
+    src.add_argument("--kick-vod", metavar="UUID", help="Kick VOD uuid'si (kick-vods ile bul)")
     src.add_argument("--youtube", metavar="VIDEO_ID", help="YouTube video id'si (yt-dlp + chat)")
     p_vod.add_argument(
         "--chat", type=Path, help="chat dosyası (.jsonl / .jsonl.gz / TwitchDownloader .json)"
@@ -90,6 +92,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_clips.add_argument("session_id", type=int)
     p_clips.add_argument("--all", action="store_true", help="reddedilenleri de göster")
 
+    p_kv = sub.add_parser("kick-vods", help="Kick kanalının bitmiş VOD'larını listele")
+    p_kv.add_argument("slug", help="kanal adı (kick.com/<slug>)")
+
     p_chat = sub.add_parser("chat-import", help="chat dosyasını ortak jsonl biçimine çevir")
     p_chat.add_argument("input", type=Path, help="TwitchDownloader .json veya .jsonl")
     p_chat.add_argument("output", type=Path, help="çıktı .jsonl veya .jsonl.gz")
@@ -128,7 +133,11 @@ async def _run_vod(args: argparse.Namespace, cfg: Config) -> int:
             )
         else:
             async with httpx.AsyncClient(http2=False) as client:
-                if args.twitch_vod:
+                if args.kick_vod:
+                    result = await ingest.ingest_kick_vod(
+                        conn, cfg, client, args.kick_vod, say=_say
+                    )
+                elif args.twitch_vod:
                     result = await ingest.ingest_twitch_vod(
                         conn, cfg, client, args.twitch_vod, say=_say
                     )
@@ -231,6 +240,23 @@ def _print_clips(conn: sqlite3.Connection, session_id: int, show_all: bool) -> i
     return 0
 
 
+async def _kick_vods(cfg: Config, slug: str) -> int:
+    async with httpx.AsyncClient() as client:
+        videos = await ingest.make_kick_api(cfg, client).videos(slug)
+    done = [v for v in videos if not v.get("is_live") and v.get("duration")]
+    if not done:
+        print(f"{slug}: herkese açık bitmiş VOD yok")
+        return 1
+    for v in done:
+        uuid = (v.get("video") or {}).get("uuid", "?")
+        cat = ((v.get("categories") or [{}])[0] or {}).get("name", "")
+        print(
+            f"{uuid}  {fmt_duration(float(v['duration']) / 1000):>8}  {v.get('start_time', '')}"
+            f"  {cat}  {v.get('session_title') or ''}"
+        )
+    return 0
+
+
 def _ensure_utf8_output() -> None:
     """Turkish text and ✔/✘ marks must not crash on Windows code pages (e.g. cp1252 pipes)."""
     for stream in (sys.stdout, sys.stderr):
@@ -322,6 +348,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"Hata: {exc}", file=sys.stderr)
             return 1
 
+    if args.command == "kick-vods":
+        try:
+            return asyncio.run(_kick_vods(cfg, args.slug))
+        except (KickError, httpx.HTTPError) as exc:
+            print(f"Hata: {exc}", file=sys.stderr)
+            return 1
+
     if args.command == "clips":
         conn = db.open_db(cfg.db_path)
         try:
@@ -337,6 +370,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             chatlog.ChatFormatError,
             MediaError,
             TwitchGQLError,
+            KickError,
             YouTubeParseError,
             YtDlpError,
             httpx.HTTPError,

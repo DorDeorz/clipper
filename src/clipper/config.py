@@ -51,6 +51,34 @@ class TwitchConfig(_Strict):
     download_concurrency: int = 6
 
 
+class KickConfig(_Strict):
+    """Unofficial kick.com web API (no account). Paths are kept here so a change on Kick's
+    side can be fixed without code. Verified live on 2026-11-18."""
+
+    base_url: str = "https://kick.com"
+    channel_path: str = "/api/v2/channels/{slug}"
+    videos_path: str = "/api/v2/channels/{slug}/videos"
+    video_path: str = "/api/v1/video/{uuid}"
+    messages_path: str = "/api/v2/channels/{channel_id}/messages"
+    # `httpx` worked from a home connection. `curl_cffi` (browser TLS fingerprint) is an
+    # optional fallback if Cloudflare starts blocking plain clients; needs `curl_cffi`.
+    http_backend: Literal["httpx", "curl_cffi"] = "httpx"
+    impersonate: str = "chrome"
+    user_agent: str = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)"
+        " Chrome/131.0.0.0 Safari/537.36"
+    )
+    accept_language: str = "tr-TR,tr;q=0.9,en;q=0.8"
+    # Chat replay returns ~5 s of messages after `start_time`; we step through the VOD.
+    chat_window_seconds: float = 5.0
+    # A window with at least this many messages may be truncated; then the next request
+    # starts at the last message's second instead of skipping a whole window.
+    chat_page_hint: int = 20
+    request_interval_seconds: float = 0.2
+    retries: int = 4
+    download_concurrency: int = 6
+
+
 class YouTubeConfig(_Strict):
     """Unofficial YouTube innertube parameters."""
 
@@ -182,6 +210,7 @@ class Config(_Strict):
     panel: PanelConfig = Field(default_factory=PanelConfig)
     monitoring: MonitoringConfig = Field(default_factory=MonitoringConfig)
     twitch: TwitchConfig = Field(default_factory=TwitchConfig)
+    kick: KickConfig = Field(default_factory=KickConfig)
     youtube: YouTubeConfig = Field(default_factory=YouTubeConfig)
     recorder: RecorderConfig = Field(default_factory=RecorderConfig)
     detector: DetectorConfig = Field(default_factory=DetectorConfig)
