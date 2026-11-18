@@ -525,11 +525,20 @@ Reddet/onay kararları ve reddetme nedenleri saklanır. Faz 8'de eşik kalibrasy
 **Bitti sayılması için:** Gerçek VOD'da `report` çıktısı makul adaylar gösteriyor. Kullanıcı 5–10 adayı izleyip "mantıklı" diyor.
 
 ### Faz 3 — Kesim + Transkript + LLM
-- [ ] `cutter.py` (segment aralığından ham kesit + `raw.wav` 16 kHz mono)
-- [ ] `whisper.py` (Bölüm 4.4), gpu_pool işçisi, model önbelleği
-- [ ] `llm/client.py` (retry, prompt caching, maliyet kaydı, bütçe koruması), `prompts.py`, `schemas.py`
-- [ ] prefilter ve judge işleri, saatlik aday sınırı, kelime sınırına snap
-- [ ] Testler: LLM istemcisi `httpx.MockTransport` ile (SDK'ya custom http_client verilerek), geçersiz JSON → tekrar deneme, bütçe aşımı → Haiku'ya düşme
+- [x] `cutter.py` (segment aralığından ham kesit + `raw.wav` 16 kHz mono)
+- [x] `whisper.py` (Bölüm 4.4), gpu_pool işçisi, model önbelleği
+  - Not: model `data/models/` altına iner, tek iş parçacıklı executor'da çalışır. `faster-whisper` normal bağımlılık (Bölüm 1'de zaten var).
+- [x] `llm/client.py` (retry, prompt caching, maliyet kaydı, bütçe koruması), `prompts.py`, `schemas.py`
+  - Sapma: Sonnet 5.5 / Opus 5.5'te zorunlu `tool_choice` (any/tool) 400 döndürdüğü için yapılandırılmış çıktı (`output_config.format` json_schema) kullanılıyor; şema pydantic'ten üretilir, cevap pydantic ile yeniden doğrulanır, geçersizse bir kez düzeltme isteğiyle tekrar sorulur.
+  - Sapma: Opus 5.5'te thinking kapatılamadığı için hız/maliyet `effort` ile ayarlanıyor (`llm.prefilter_effort: low`, `llm.judge_effort: medium`).
+  - Ek: Sonnet/Opus çağrılarında sunucu taraflı ret yedeği (beta `server-side-fallback-2026-07-01`, `llm.refusal_fallback`). Ret gelirse aday `rejected` olur, tekrar denenmez.
+  - Fiyatlar docs'tan doğrulandı (2026-11, $/1M): Haiku 5.5 0.10/0.50, Sonnet 5.5 2/10 (cache okuma 0.10), Opus 5.5 4/20 (cache okuma 0.20). Haiku cache okuma 0.01 varsayıldı (girdinin %10'u). Cache yazma girdinin 1.25 katı.
+- [x] prefilter ve judge işleri, saatlik aday sınırı, kelime sınırına snap
+  - Not: işler `clipper work` ile kuyruk boşalana kadar çalışır (`clipper run` Faz 5/6'da). Sonuçlar `clipper clips <session_id> [--all]` ile görülür.
+  - Not: saatlik sınır için judge işleri prefilter puanına göre sıralanır (yüksek puan önce), saat dilimi dolunca kalanlar "saatlik aday sınırı doldu" gerekçesiyle reddedilir. Son başlıklar, yayınlama gelene kadar yayıncının daha önce judge'dan geçmiş klip başlıklarından alınıyor.
+- [x] Testler: LLM istemcisi `httpx.MockTransport` ile (SDK'ya custom http_client verilerek), geçersiz JSON → tekrar deneme, bütçe aşımı → Haiku'ya düşme
+  - Not: anthropic SDK 2.x `httpx2` üzerine kurulu, testler `httpx2.MockTransport` + `anthropic.DefaultAsyncHttpxClient(transport=...)` kullanıyor.
+  - Bekleyen: "Bitti" maddesi için gerçek bir VOD'da `ANTHROPIC_API_KEY` ile `clipper work` çalıştırılması ve `llm_usage` maliyetinin ölçülmesi.
 
 **Bitti sayılması için:** VOD session'ında adaylar transkriptlenip judge'dan geçiyor. `clips` tablosunda başlık/metinler dolu. Saatlik maliyet `llm_usage`'te görülüyor (hedef Sonnet ile < $0.25/yayın saati).
 
