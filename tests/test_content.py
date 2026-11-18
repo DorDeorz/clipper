@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import sqlite3
 from pathlib import Path
@@ -93,7 +94,7 @@ def test_three_minute_cap() -> None:
     out += acc.flush()
     assert len(out) >= 3
     assert all(d.win_end - d.win_start <= 180 for d in out)
-    assert all(b.win_start >= a.win_end for a, b in zip(out, out[1:], strict=False))
+    assert all(b.win_start >= a.win_end for a, b in itertools.pairwise(out))
 
 
 def test_low_or_skipped_window_closes() -> None:
