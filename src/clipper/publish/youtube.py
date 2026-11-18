@@ -18,6 +18,7 @@ import httpx
 
 from clipper.config import PublishConfig
 from clipper.publish.base import (
+    BACKOFF_MAX,
     AuthError,
     ClipForPublish,
     PublishError,
@@ -28,12 +29,15 @@ from clipper.publish.base import (
     backoff,
     error_text,
     read_chunk,
+    retry_after,
     send,
 )
 
 UPLOAD_URL = "https://www.googleapis.com/upload/youtube/v3/videos"
 CHUNK_UNIT = 256 * 1024
-RETRY_STATUS = {500, 502, 503, 504}
+# 429 is not in the resumable-upload guide (5xx only) but Google front ends do send it;
+# retrying with backoff is safe and losing the upload is not.
+RETRY_STATUS = {429, 500, 502, 503, 504}
 MAX_RESUMES = 6
 
 
@@ -184,7 +188,8 @@ class YouTubePublisher:
             resumes += 1
             if resumes > MAX_RESUMES:
                 raise PublishError("youtube: yükleme sürekli kopuyor, sonra devam edilecek")
-            await self.sleep(backoff(resumes - 1))
+            wait = retry_after(resp) if resp is not None else None
+            await self.sleep(min(wait, BACKOFF_MAX) if wait is not None else backoff(resumes - 1))
             q = await self._query(uri, total, account)
             if isinstance(q, httpx.Response):
                 return _done(q)

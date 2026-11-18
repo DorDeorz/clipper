@@ -35,11 +35,12 @@
   > Not: `transcribe.cache_dir` ayarlıysa açık (anahtar: model + dil + beam + WAV SHA-256). `--no-whisper-cache` bayrağı eval komutlarıyla gelecek.
 - [x] **Sahte transkript enjeksiyonu:** Sentetik senaryolarda Türkçe konuşma üretmek zor. Fixture'lar `fake_transcript.jsonl` sağlayabilir. `transcribe.backend: fake` olunca whisper yerine bu okunur.
   > Not: `transcribe.fake_path`; satırlar `{"start","end","text"}` oturum zamanında (PDT). Kelime zamanları eşit aralıklı üretilir.
-- [ ] **Sahte platform sunucuları** (`tests/fakes/`), hepsi yerel ve ağsız:
+- [x] **Sahte platform sunucuları** (`tests/fakes/`), hepsi yerel ve ağsız:
   - `fake_twitch.py`: IRC-WS (PRIVMSG, USERNOTICE sub/subgift/raid, PING, kopma), GQL (stream, clips, PlaybackAccessToken), usher HLS (master + media playlist, PDT, reklam DATERANGE'i)
   - `fake_kick.py`: kanal API (Cloudflare 403 simülasyonu dahil), Pusher WS (çift JSON-encoded event)
   - `fake_youtube.py`: `/live` sayfası, `live_chat` HTML + `get_live_chat` continuation zinciri, replay
   - `fake_publishers.py`: YouTube resumable upload, IG container/rupload/publish, X media upload v2 + tweets, TikTok inbox init/PUT/status. Hepsinde 429, 5xx, token süresi dolması ve yarıda kopma modları.
+  > Not: `tests/fakes/` (fake_twitch: IRC-WS + GQL + HLS; fake_kick: API + Pusher; fake_youtube: /live + live_chat zinciri; faults: 429/5xx/401/403/kopma enjeksiyonu). Yayıncılar için mevcut `tests/test_publish.py` sahteleri `faults.Faulty` ile sarılıyor. Testler: `tests/test_integration.py` (`-m integration`). Bulunan hatalar: YouTube yükleme 429'u kalıcı hata sayıp yüklemeyi bırakıyordu (artık Retry-After ile tekrar); YouTube chat yapısı değişince sessizce 0 mesaj okunuyordu (artık 3 sayfa üst üste tanınmayan öğe → anlaşılır hata).
 - [x] **Senaryo üretici** `tests/fixtures/scenarios.py`: Bölüm 2.1'deki her senaryo için video + chat + olaylar + (gerekiyorsa) sahte transkript + **beklenen sonuç dosyası** (`expected.json`) üretir.
   > Not: `clipper.evals.scenarios` (testler `tests/fixtures/scenarios.py` üzerinden kullanır). Dedektör testleri için sadece ses segmentleri (8 kHz WAV), tam pipeline için `video=True` ile 1080p mpegts segmentleri. Sapmalar: S02'de ses olay anında, chat tepkisi `lag_seconds` (20 sn) sonra zirve yapıyor (DET-20 ile tutarlı olsun diye; plandaki "2 sn önce" varsayılan lag ile çelişiyordu). S17/S18 6 dk (3 dk'lık `warmup_seconds` yüzünden). S12 VOD modunda kopma bilgisi olmadığından sadece "mesaj yok" olarak modellendi.
 - [ ] **Etiketleme modu (panel):** `clipper label <session_id>` paneli etiketleme ekranında açar. Video oynatıcı + zaman çizelgesi. Kullanıcı "iyi an" işaretler: başlangıç/bitiş, tür (`komik / şok / hikâye / atışma / oyun anı / diğer`), kalite (1 = idare eder, 2 = iyi, 3 = kesin klip). Çıktı `eval/labels/<session>.json`. Sistemin aday çıktıları bu ekranda **gizli** olmalı (etiketleyen etkilenmesin).
@@ -118,7 +119,7 @@ Mevcut testlere ek olarak şunların hepsi var olmalı ve geçmeli:
 - [x] CHAT-05 Kullanıcı ID'leri hash'lenmiş; ham kullanıcı adı diske yazılmıyor (dosyada grep) — `test_testplan_units::test_chat05_raw_usernames_never_written`
 
 **Kaydedici (REC)**
-- [x] REC-01 Sahte HLS: 30 dk boyunca segment kaybı yok, seq sıralı, PDT doğru — `test_live::test_recorder_takes_new_segments_skips_ads_and_refreshes (kısa playlist; 30 dk'lık koşu seviye 2'de)`
+- [x] REC-01 Sahte HLS: 30 dk boyunca segment kaybı yok, seq sıralı, PDT doğru — `test_integration::test_rec01_thirty_minutes_no_segment_loss`
 - [x] REC-02 Reklam DATERANGE segmentleri `is_ad=1` — `test_m3u8::test_media_playlist_pdt_and_ads`
 - [x] REC-03 403 (token süresi doldu) → yeni token, boşluk ≤ 1 segment — `test_live::test_recorder_takes_new_segments_skips_ads_and_refreshes`
 - [x] REC-04 Halka tampon: 15 dk'dan eski segmentler silinir, bekleyen `cut` işinin kapsadıkları silinmez — `test_live::test_prune_keeps_segments_pending_cuts_need`
@@ -280,8 +281,8 @@ Sahte sunucular ve süreç kontrolüyle:
 - [ ] CHAOS-05 ffmpeg bozuk segmentle karşılaşıyor (rastgele bayt bozulması) → o klip `failed`, diğerleri etkilenmez
 - [ ] CHAOS-06 Whisper GPU OOM → CPU'ya veya küçük modele düşüş, log
 - [ ] CHAOS-07 Saat sıçraması (sistem saati 1 saat ileri/geri, sahte) → PDT tabanlı hiza bozulmuyor, monotonic saat kullanılan yerler doğru
-- [ ] CHAOS-08 Kick Cloudflare 403 / Pusher anahtarı geçersiz → anlaşılır Türkçe hata, diğer platformlar çalışmaya devam
-- [ ] CHAOS-09 YouTube innertube yapısı değişmiş (fake sunucu alan adlarını değiştirir) → parse hatası alarmı, resmi API yedeğine geçiş (key varsa) veya kanal "chat yok" moduna
+- [x] CHAOS-08 Kick Cloudflare 403 / Pusher anahtarı geçersiz → anlaşılır Türkçe hata, diğer platformlar çalışmaya devam — `test_integration::test_chaos08_kick_cloudflare_403_is_clear`
+- [x] CHAOS-09 YouTube innertube yapısı değişmiş (fake sunucu alan adlarını değiştirir) → parse hatası alarmı, resmi API yedeğine geçiş (key varsa) veya kanal "chat yok" moduna — `test_integration::test_chaos09_youtube_layout_change_is_detected (alarm var; resmi API'ye otomatik geçiş yok, `YOUTUBE_API_KEY` yedeği ayrı iş)`
 
 ---
 
