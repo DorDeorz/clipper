@@ -116,6 +116,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_cal.add_argument("streamer", help="yayıncı adı ya da kanal")
     p_cal.add_argument("--apply", action="store_true", help="öneriyi yayıncıya kaydet")
 
+    p_lab = sub.add_parser("label", help="bir yayını izleyip 'iyi an'ları etiketle (altın set)")
+    p_lab.add_argument("session_id", type=int, help="session numarası")
+    p_lab.add_argument("--labeler", default="", help="etiketleyen kişi (ikinci kişi için)")
+    p_lab.add_argument("--out", type=Path, default=Path("eval/labels"), help="etiket klasörü")
+    p_lab.add_argument("--port", type=int, default=None, help="varsayılan: panel portu + 1")
+    p_lab.add_argument("--no-browser", action="store_true", help="tarayıcıyı açma")
+
     p_eval = sub.add_parser("eval", help="test planı değerlendirmeleri (TESTPLAN.md)")
     eval_sub = p_eval.add_subparsers(dest="eval_kind", required=True, metavar="TÜR")
     p_syn = eval_sub.add_parser("synthetic", help="S01–S18 sentetik senaryolar, tam pipeline")
@@ -422,6 +429,41 @@ def _ensure_utf8_output() -> None:
             reconfigure(encoding="utf-8", errors="replace")
 
 
+def _label(cfg: Config, args: argparse.Namespace) -> int:
+    import webbrowser
+
+    import uvicorn
+
+    from clipper.evals import labels as L
+    from clipper.panel.label_app import create_label_app
+
+    conn = db.open_db(cfg.db_path)
+    try:
+        info = L.session_info(conn, args.session_id)
+        proxy = cfg.paths.data_dir / "label_proxy" / f"{args.session_id}.mp4"
+        print(f"#{info['id']} {info['streamer']}: {info['title'] or ''}")
+        print("Önizleme videosu hazırlanıyor (ilk seferde birkaç dakika sürebilir)...")
+        asyncio.run(L.build_proxy(conn, args.session_id, proxy, cfg.paths.ffmpeg))
+        out = L.label_path(args.out, args.session_id, args.labeler)
+        app = create_label_app(conn, args.session_id, proxy, out, args.labeler)
+    except L.LabelError as exc:
+        conn.close()
+        print(f"Hata: {exc}", file=sys.stderr)
+        return 1
+    port = args.port or cfg.panel.port + 1
+    url = f"http://127.0.0.1:{port}/"
+    print(f"Etiketleme ekranı: {url}  (bitince Ctrl+C). Etiketler: {out}")
+    if not args.no_browser:
+        webbrowser.open(url)
+    try:
+        uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+    except KeyboardInterrupt:
+        pass
+    finally:
+        conn.close()
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     _ensure_utf8_output()
     parser = build_parser()
@@ -454,6 +496,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         from clipper.doctor import doctor
 
         return doctor(cfg, secrets)
+
+    if args.command == "label":
+        return _label(cfg, args)
 
     if args.command == "calibrate":
         return _calibrate(cfg, args.streamer, args.apply)

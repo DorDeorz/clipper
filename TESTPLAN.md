@@ -43,7 +43,8 @@
   > Not: `tests/fakes/` (fake_twitch: IRC-WS + GQL + HLS; fake_kick: API + Pusher; fake_youtube: /live + live_chat zinciri; faults: 429/5xx/401/403/kopma enjeksiyonu). Yayıncılar için mevcut `tests/test_publish.py` sahteleri `faults.Faulty` ile sarılıyor. Testler: `tests/test_integration.py` (`-m integration`). Bulunan hatalar: YouTube yükleme 429'u kalıcı hata sayıp yüklemeyi bırakıyordu (artık Retry-After ile tekrar); YouTube chat yapısı değişince sessizce 0 mesaj okunuyordu (artık 3 sayfa üst üste tanınmayan öğe → anlaşılır hata).
 - [x] **Senaryo üretici** `tests/fixtures/scenarios.py`: Bölüm 2.1'deki her senaryo için video + chat + olaylar + (gerekiyorsa) sahte transkript + **beklenen sonuç dosyası** (`expected.json`) üretir.
   > Not: `clipper.evals.scenarios` (testler `tests/fixtures/scenarios.py` üzerinden kullanır). Dedektör testleri için sadece ses segmentleri (8 kHz WAV), tam pipeline için `video=True` ile 1080p mpegts segmentleri. Sapmalar: S02'de ses olay anında, chat tepkisi `lag_seconds` (20 sn) sonra zirve yapıyor (DET-20 ile tutarlı olsun diye; plandaki "2 sn önce" varsayılan lag ile çelişiyordu). S17/S18 6 dk (3 dk'lık `warmup_seconds` yüzünden). S14/S15 de 6 dk; içerik anı 270. sn'de (tam pipeline'da klip üretmeleri için). S12 VOD modunda kopma bilgisi olmadığından sadece "mesaj yok" olarak modellendi.
-- [ ] **Etiketleme modu (panel):** `clipper label <session_id>` paneli etiketleme ekranında açar. Video oynatıcı + zaman çizelgesi. Kullanıcı "iyi an" işaretler: başlangıç/bitiş, tür (`komik / şok / hikâye / atışma / oyun anı / diğer`), kalite (1 = idare eder, 2 = iyi, 3 = kesin klip). Çıktı `eval/labels/<session>.json`. Sistemin aday çıktıları bu ekranda **gizli** olmalı (etiketleyen etkilenmesin).
+- [x] **Etiketleme modu (panel):** `clipper label <session_id>` paneli etiketleme ekranında açar. Video oynatıcı + zaman çizelgesi. Kullanıcı "iyi an" işaretler: başlangıç/bitiş, tür (`komik / şok / hikâye / atışma / oyun anı / diğer`), kalite (1 = idare eder, 2 = iyi, 3 = kesin klip). Çıktı `eval/labels/<session>.json`. Sistemin aday çıktıları bu ekranda **gizli** olmalı (etiketleyen etkilenmesin).
+  > Not: `clipper label <session> [--labeler ad]` ayrı bir küçük sunucu açar (panel portu + 1); sadece `/api/label` ve 540p önizleme videosu var, aday/klip/sinyal uç noktası hiç yok. Etiket zamanları session saatinde (`candidates.peak_ts` ile aynı), izlenen video konumu da saklanır. İkinci kişi `eval/labels/<session>_<ad>.json`'a yazar; uyum `clipper.evals.labels.agreement`.
 - [x] **Eval rapor üretici:** her `clipper eval ...` koşusu `eval/reports/<tarih>_<tür>.html` + `.json` üretir. Metrik tabloları, başarısız test listesi, sinyal grafikleri, örnek klip linkleri, maliyet.
   > Not: `clipper.evals.report` temel sürüm: özet + senaryo/kontrol tablosu + başarısız liste (JSON + HTML). Sinyal grafikleri ve maliyet sütunu henüz yok.
 - [x] **Kaynak izleyici:** eval sırasında her 10 sn: RSS bellek, CPU %, GPU VRAM (varsa `nvidia-smi --query-gpu`), disk kullanımı, açık dosya sayısı, kuyruk uzunlukları → `metrics.csv`.
@@ -174,7 +175,7 @@ Mevcut testlere ek olarak şunların hepsi var olmalı ve geçmeli:
 - [x] PNL-02 Onay/red/edited → `feedback` satırı + `features_snapshot` dolu — `test_panel::test_reject_with_reason`
 - [x] PNL-03 "Reddedilenler"den kurtarma → `rescued` feedback — `test_panel::test_rescue_llm_rejected`
 - [x] PNL-04 Facecam dikdörtgen seçimi oranlı koordinat olarak kaydediliyor — `test_panel::test_streamers_crud`
-- [ ] PNL-05 Etiketleme modunda sistem adayları API'den dönmüyor
+- [x] PNL-05 Etiketleme modunda sistem adayları API'den dönmüyor
 
 ---
 
