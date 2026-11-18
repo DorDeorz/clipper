@@ -107,7 +107,27 @@ async function loadStatus() {
 
 // ---- live / signals -----------------------------------------------------------------
 
+async function loadLiveNow() {
+  const box = document.getElementById("live-now");
+  const live = await call("GET", "/api/live").catch(() => []);
+  if (!live.length) {
+    box.replaceChildren(h("p", { class: "muted" }, "Şu an kaydedilen canlı yayın yok. Takip açık yayıncılar her dakika kontrol ediliyor."));
+    return;
+  }
+  box.replaceChildren(...live.map((l) => h("article", { class: "card" },
+    h("div", { class: "head" }, h("strong", {}, `● ${l.display_name}`), h("span", { class: "muted" }, `${l.platform}/${l.channel}`)),
+    h("div", { class: "muted" }, `${l.title || ""} · ${l.category || ""}`),
+    h("div", { class: "muted" }, `Session #${l.session_id} · ${l.candidates} aday · başladı ${(l.started_at || "").slice(11, 16)}`),
+    h("div", { class: "row" },
+      h("button", { onclick: async () => {
+        const r = await act(() => call("POST", `/api/live/${l.streamer_id}/mark`));
+        if (r) toast(`İşaretlendi (${fmtTime(r.ts)}). Gecikme ayarı için: clipper calibrate ${l.channel}`);
+      } }, "Şimdi oldu"),
+      h("button", { onclick: () => { document.getElementById("session-select").value = l.session_id; loadSignals(); } }, "Grafiği göster")))));
+}
+
 async function loadLive() {
+  await loadLiveNow();
   const sessions = await act(() => call("GET", "/api/sessions"));
   if (!sessions) return;
   const sel = document.getElementById("session-select");
@@ -484,4 +504,4 @@ document.getElementById("streamer-form").addEventListener("submit", saveStreamer
 setupCanvas();
 loadStatus().then(() => showTab(state.tab));
 setInterval(loadStatus, 10000);
-setInterval(() => { if (state.tab === "live") loadSignals(); }, 15000);
+setInterval(() => { if (state.tab === "live") { loadLiveNow(); loadSignals(); } }, 15000);

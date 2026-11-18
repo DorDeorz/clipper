@@ -73,3 +73,4 @@ pre#log-lines { background: #0d0f13; border: 1px solid var(--line); border-radiu
   main { padding: 10px; }
   .cards { grid-template-columns: 1fr; }
 }
+.live-now { margin-bottom: 14px; }

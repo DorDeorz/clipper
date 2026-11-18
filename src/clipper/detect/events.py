@@ -138,6 +138,8 @@ def events_near(events: Sequence[LiveEvent], t0: float, t1: float) -> dict[str, 
     for bits, donations and superchats)."""
     out: dict[str, float] = {}
     for e in events:
+        if e.kind == "mark":  # calibration marks are not stream events
+            continue
         if t0 <= e.ts <= t1:
             if e.kind in ("bits", "donation", "superchat") and e.amount is not None:
                 out[e.kind] = out.get(e.kind, 0.0) + e.amount

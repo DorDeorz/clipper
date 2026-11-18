@@ -716,17 +716,28 @@ Reddet/onay kararları `feedback` tablosuna yazılır (bkz. 4.9). Reddet butonu 
 
 ### Faz 6 — Canlı hat
 - [ ] Anonim uç noktaların canlı doğrulaması: Twitch GQL (stream, clips) ve YouTube innertube (live_chat) gerçekte çalışıyor mu? Sonucu Bölüm 4.1'e not düş. Çalışmayan için persisted query / resmi API yedeğini devreye al.
-- [ ] `platforms/*/live.py` (canlı mı kontrolü; Twitch: anonim GQL, Kick: kanal API, YouTube: /live sayfası), `LiveWatcher`
-- [ ] `hls_recorder.py` + Twitch/Kick/YouTube HLS çözümleyiciler (Bölüm 4.2), reklam segment filtresi, token yenileme
-- [ ] Chat istemcileri: `twitch/chat_irc.py` (anonim), `kick/chat_pusher.py` (anonim), `youtube/innertube.py` (anonim) + `youtube/chat_official.py` (yedek). Hepsinde otomatik yeniden bağlanma, kopma süresince "chat yok" işaretlenir ve dedektör o aralıkta tetiklemez)
-- [ ] Dedektörün akış modu + canlı ses analizi (her yeni segmentte)
-- [ ] (r3) **LiveTranscriber** + **ContentScanner** canlı görevleri (4.3b), gpu_pool öncelik kuralı, gerideyse parça atlama
-- [ ] (r3) Canlı izleyici klibi takibi (anonim GQL, 60 sn) ve canlı olay toplama (IRC USERNOTICE, Kick event'leri, YouTube paid/membership)
-- [ ] (r3) Panel "Canlı" sekmesinde üç yolun adayları ayrı renkte, içerik taramalarının skor çizgisi sinyal grafiğinin altında
-- [ ] Halka tampon temizliği, bekleyen kesimleri koruma
-- [ ] Session kapanışı (yayın bitti → 2 dk bekle → kaydı kapat, kalan işleri bitir)
-- [ ] `clipper calibrate <streamer>`: canlı yayında panelden "şimdi oldu" butonuna basılan anlar ile chat peak'leri arasındaki farkın medyanı → `lag_seconds` önerisi
-- [ ] Testler: kaydedici için yerel sahte HLS sunucusu (FastAPI test app, fixture segmentleriyle). Chat istemcileri için sahte WS sunucusu (`websockets.serve`).
+  - Not (2026-11-18): Bulut geliştirme ortamı bu sitelere erişemiyor; masaüstünde deneme betiği (`faz6_probe.py`) oradaki güvenlik kontrolüne takıldı. Doğrulama gerçek test aşamasına kaldı. Kod ROADMAP'teki biçimlere göre yazıldı, alan/olay adları config'te. Kick'te `ChatMessageEvent` dışındaki olay adları (Subscription, GiftedSubscriptions, StreamHost) doğrulanmadı; bilinmeyen olaylar bir kez loglanır.
+- [x] `platforms/*/live.py` (canlı mı kontrolü; Twitch: anonim GQL, Kick: kanal API, YouTube: /live sayfası), `LiveWatcher`
+  - Not: Twitch kanalları tek GQL isteğinde (`users(logins:)`) sorulur. YouTube canlı durumu `innertube.live_status`. Takipçi `live/watcher.py`, platform bağları `live/sources.py`. Aynı anda en çok `monitoring.max_concurrent_sessions` (5) session. Yayın `offline_grace_seconds` (120 sn) kapalı kalırsa session kapanır.
+- [x] `hls_recorder.py` + Twitch/Kick/YouTube HLS çözümleyiciler (Bölüm 4.2), reklam segment filtresi, token yenileme
+  - Not: `recorder/hls_live.py`. Zaman tabanı VOD ile aynı: session zamanı = duvar saati − session açılışı (`session.json` `t0`), böylece kesici/dedektör/transkript kodu ortak. fMP4 playlist'lerde init bölümü her parçanın önüne eklenir (her dosya tek başına çözülebilir). Reklam segmentleri indirilmez, satırı `is_ad=1, deleted=1` olarak tutulur. 403/404/410'da çözümleyici tekrar çağrılır (yeni token).
+- [x] Chat istemcileri: `twitch/chat_irc.py` (anonim), `kick/chat_pusher.py` (anonim), `youtube/innertube.py` (anonim) + `youtube/chat_official.py` (yedek). Hepsinde otomatik yeniden bağlanma, kopma süresince "chat yok" işaretlenir ve dedektör o aralıkta tetiklemez)
+  - Not: Ortak yeniden bağlanma `live/chat.py` (1, 2, 4… 60 sn, jitter). `youtube/chat_official.py` (Data API yedeği) yazılmadı: API anahtarı ve kota gerektiriyor, innertube çalışmazsa eklenecek.
+- [x] Dedektörün akış modu + canlı ses analizi (her yeni segmentte)
+  - Not: Dedektör gerçek zamanın `feed_delay` (8 sn) gerisinden besleniyor (chat gecikmesi). Ses segmentle geç gelir; `Detector.add_audio` ile eklenir, skora zaten `lag_seconds` geriden girer. Kesim işi aday penceresinin sonu + 20 sn'ye ertelenir (`run_after`).
+- [x] (r3) **LiveTranscriber** + **ContentScanner** canlı görevleri (4.3b), gpu_pool öncelik kuralı, gerideyse parça atlama
+  - Not: `live/content.py`. Kuyrukta `transcribe` işi varken canlı parça bekler. Canlı transkriptten gelen konuşma hızı/anahtar laf sinyali canlı dedektöre beslenmiyor (transkript dedektörden ~30 sn geride); VOD modunda besleniyor.
+- [x] (r3) Canlı izleyici klibi takibi (anonim GQL, 60 sn) ve canlı olay toplama (IRC USERNOTICE, Kick event'leri, YouTube paid/membership)
+  - Not: Gizemli hediye paketi tek olay sayılır, ardından gelen tek tek `subgift` bildirimleri (community-gift-id'li) atlanır. Canlı klipte olay zamanı `createdAt − durationSeconds`.
+- [x] (r3) Panel "Canlı" sekmesinde üç yolun adayları ayrı renkte, içerik taramalarının skor çizgisi sinyal grafiğinin altında
+  - Not: Ayrıca kaydedilen canlı yayınlar kart olarak ve "Şimdi oldu" butonu (kalibrasyon işareti).
+- [x] Halka tampon temizliği, bekleyen kesimleri koruma
+- [x] Session kapanışı (yayın bitti → 2 dk bekle → kaydı kapat, kalan işleri bitir)
+  - Not: Kapanışta açık tespit flush edilir, canlı chat dosyası `chat.jsonl.gz`'ye sıkıştırılır. Kuyruktaki işler workerlarda devam eder.
+- [x] `clipper calibrate <streamer>`: canlı yayında panelden "şimdi oldu" butonuna basılan anlar ile chat peak'leri arasındaki farkın medyanı → `lag_seconds` önerisi
+  - Not: İşaretler `live_events` (`kind=mark`). En az 3 eşleşme gerekir. `--apply` yayıncının `detector_overrides.lag_seconds`'ına yazar.
+- [x] Testler: kaydedici için yerel sahte HLS sunucusu (FastAPI test app, fixture segmentleriyle). Chat istemcileri için sahte WS sunucusu (`websockets.serve`).
+  - Not: HLS için `httpx.MockTransport` (ffmpeg'den üretilen gerçek TS segmentleri, kayıt sonrası kesim ve ses analizi dahil). IRC ve Pusher için `websockets.serve`.
 
 **Bitti sayılması için:** Bir Twitch ve bir Kick yayını 2 saat boyunca kesintisiz kaydediliyor. Adaylar yayın sırasında oluşuyor, yayın bitmeden klipler panelde görünüyor. Bellek/disk sabit kalıyor.
 

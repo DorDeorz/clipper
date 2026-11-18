@@ -276,3 +276,23 @@ def test_run_forever_stops(world: Any) -> None:
 
     asyncio.run(go())
     assert seen == ["a", "b"]
+
+
+def test_live_list_and_mark(client: TestClient, world: Any) -> None:
+    conn, cfg = world
+    assert client.get("/api/live").json() == []
+    assert client.post("/api/live/1/mark").status_code == 404
+    sdir = cfg.paths.data_dir / "sessions" / "9"
+    sdir.mkdir(parents=True)
+    (sdir / "session.json").write_text('{"t0": 1000.0}', encoding="utf-8")
+    conn.execute(
+        "INSERT INTO sessions (id, streamer_id, source, started_at, dir, status)"
+        " VALUES (9, 1, 'live', '2026-11-18T20:00:00', ?, 'recording')",
+        (str(sdir),),
+    )
+    (live,) = client.get("/api/live").json()
+    assert live["session_id"] == 9 and live["display_name"] == "Ali"
+    ts = client.post("/api/live/1/mark").json()["ts"]
+    assert ts > 0
+    kinds = [r[0] for r in conn.execute("SELECT kind FROM live_events WHERE session_id = 9")]
+    assert kinds == ["mark"]

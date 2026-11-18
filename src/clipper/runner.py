@@ -15,6 +15,8 @@ import webbrowser
 from collections.abc import Iterator
 from typing import Any
 
+import httpx
+
 from clipper import db
 from clipper.config import Config, Secrets
 from clipper.log import get_logger
@@ -95,7 +97,34 @@ def _quiet_server_cls() -> Any:
     return QuietServer
 
 
-async def run(cfg: Config, secrets: Secrets, *, open_browser: bool = True) -> int:
+def live_extra_tasks(cfg: Config, llm: Any, live_transcriber: Any) -> Any:
+    """Content path tasks for each live session (ROADMAP 4.3b), when available."""
+    from clipper.content.scanner import ContentScanner
+    from clipper.live.content import live_scanner_task, live_transcriber_task
+
+    def factory() -> list[Any]:
+        tasks: list[Any] = []
+        if live_transcriber is not None:
+            tasks.append(live_transcriber_task(live_transcriber))
+            if llm is not None and cfg.content_scan.enabled:
+                tasks.append(
+                    live_scanner_task(
+                        lambda s: ContentScanner(
+                            cfg.content_scan,
+                            llm,
+                            streamer=s.streamer["display_name"],
+                            category=s.source.category,
+                        )
+                    )
+                )
+        return tasks
+
+    return factory
+
+
+async def run(
+    cfg: Config, secrets: Secrets, *, open_browser: bool = True, live: bool = True
+) -> int:
     import uvicorn
 
     from clipper.stages import Stages
@@ -138,6 +167,31 @@ async def run(cfg: Config, secrets: Secrets, *, open_browser: bool = True) -> in
             stop.set()
 
     workers = asyncio.create_task(run_forever(conn, stages.handle, stop, pools=pools))
+    live_transcriber = None
+    watcher_task: asyncio.Task[None] | None = None
+    client = httpx.AsyncClient(timeout=30, follow_redirects=True)
+    if live:
+        from clipper.live.sources import make_prober
+        from clipper.live.watcher import LiveWatcher
+
+        if cfg.live_transcribe.enabled:
+            live_transcriber = Transcriber(
+                cfg.transcribe.model_copy(
+                    update={
+                        "model": cfg.live_transcribe.model,
+                        "beam_size": cfg.live_transcribe.beam_size,
+                    }
+                ),
+                cfg.model_dir,
+            )
+        watcher = LiveWatcher(
+            conn,
+            cfg,
+            client,
+            make_prober(cfg, client),
+            extra_tasks=live_extra_tasks(cfg, llm, live_transcriber),
+        )
+        watcher_task = asyncio.create_task(watcher.run(stop), name="watcher")
     announcer = asyncio.create_task(announce())
     try:
         await serve()
@@ -146,8 +200,13 @@ async def run(cfg: Config, secrets: Secrets, *, open_browser: bool = True) -> in
         announcer.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await announcer
+        if watcher_task is not None:
+            await asyncio.gather(watcher_task, return_exceptions=True)
         stats = await workers
+        await client.aclose()
         transcriber.close()
+        if live_transcriber is not None:
+            live_transcriber.close()
         conn.close()
     print(f"Durduruldu. Bu oturumda {stats.done} iş bitti, {stats.failed} hata.", file=sys.stderr)
     return 0

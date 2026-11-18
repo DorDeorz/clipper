@@ -94,6 +94,12 @@ class Detector:
         """Twitch: a viewer created a clip at `ts` (strong signal, bonus on nearby peaks)."""
         self._viewer_clips.append(ts)
 
+    def add_audio(self, t: int, db: float) -> None:
+        """Live: audio of second `t` arrives with its HLS segment, often after `t` was fed.
+        It is used `lag_seconds` later (sound comes before the chat reaction)."""
+        if self._last_t is None or t > self._last_t - int(self.cfg.lag_seconds):
+            self._audio[t] = db
+
     def feed(self, obs: Observation) -> list[Detection]:
         if self._last_t is not None and obs.t <= self._last_t:
             raise ValueError("observations must be fed in increasing time order")

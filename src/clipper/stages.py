@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -48,7 +49,7 @@ from clipper.recorder.cutter import cut
 from clipper.render.clip import render_clip
 from clipper.render.ffmpeg import RenderError
 from clipper.render.layouts import Rect, effective_layout
-from clipper.sessions import CHAT_FILE
+from clipper.sessions import CHAT_FILE, LIVE_CHAT_FILE
 from clipper.transcribe.whisper import Transcriber
 from clipper.util.timeutil import iso_now
 
@@ -77,6 +78,15 @@ def hour_bucket(peak_ts: float) -> int:
     return math.floor(peak_ts / 3600)
 
 
+def _read_chat(path: Path) -> Iterator[ChatMessage]:
+    """Chat of a session; a live file may end in a half-written line, which is skipped."""
+    try:
+        yield from chatlog.read_jsonl(path)
+    except chatlog.ChatFormatError:
+        if path.suffix == ".gz":
+            raise
+
+
 class Stages:
     def __init__(
         self,
@@ -90,7 +100,7 @@ class Stages:
         self.cfg = cfg
         self.transcriber = transcriber
         self.llm = llm
-        self._chat_cache: tuple[int, list[ChatMessage]] | None = None
+        self._chat_cache: tuple[int, float, list[ChatMessage]] | None = None
 
     # ---- helpers -------------------------------------------------------------------------
 
@@ -124,11 +134,14 @@ class Stages:
         )
 
     def _chat(self, session_id: int, session_dir: Path) -> list[ChatMessage]:
-        if self._chat_cache is None or self._chat_cache[0] != session_id:
-            path = session_dir / CHAT_FILE
-            msgs = list(chatlog.read_jsonl(path)) if path.is_file() else []
-            self._chat_cache = (session_id, msgs)
-        return self._chat_cache[1]
+        path = session_dir / CHAT_FILE
+        if not path.is_file():  # live session still running: plain file, still growing
+            path = session_dir / LIVE_CHAT_FILE
+        mtime = path.stat().st_mtime if path.is_file() else 0.0
+        if self._chat_cache is None or self._chat_cache[:2] != (session_id, mtime):
+            msgs = list(_read_chat(path)) if path.is_file() else []
+            self._chat_cache = (session_id, mtime, msgs)
+        return self._chat_cache[2]
 
     def _transcript(self, clip: sqlite3.Row) -> list[dict[str, Any]]:
         path = clip["transcript_path"]
