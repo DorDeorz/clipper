@@ -12,7 +12,7 @@ from pathlib import Path
 import httpx
 
 from clipper import __version__, chatlog, db, ingest
-from clipper.config import Config, ConfigError, load_config, load_secrets
+from clipper.config import Config, ConfigError, Secrets, load_config, load_secrets
 from clipper.detect.pipeline import DetectError
 from clipper.log import get_logger, setup_logging
 from clipper.media import MediaError
@@ -75,6 +75,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_rep = sub.add_parser("report", help="session için HTML sinyal raporu üret")
     p_rep.add_argument("session_id", type=int)
     p_rep.add_argument("--out", type=Path, help="çıktı dosyası (varsayılan: session klasörü)")
+
+    p_work = sub.add_parser(
+        "work", help="kuyruktaki işleri (kesim, transkript, LLM) bitene kadar çalıştır"
+    )
+    p_work.add_argument(
+        "--pool",
+        choices=["cpu", "gpu", "io"],
+        action="append",
+        help="sadece bu havuz(lar) (varsayılan: hepsi)",
+    )
+
+    p_clips = sub.add_parser("clips", help="session kliplerini ve LLM kararlarını listele")
+    p_clips.add_argument("session_id", type=int)
+    p_clips.add_argument("--all", action="store_true", help="reddedilenleri de göster")
 
     p_chat = sub.add_parser("chat-import", help="chat dosyasını ortak jsonl biçimine çevir")
     p_chat.add_argument("input", type=Path, help="TwitchDownloader .json veya .jsonl")
@@ -143,6 +157,77 @@ async def _detect_and_report(
     path = write_report(conn, session_id, cfg.detector.threshold)
     print(f"Dedektör: {len(res.candidate_ids)} aday ({fmt_duration(res.seconds)} tarandı)")
     print(f"Rapor: {path}")
+    return 0
+
+
+async def _run_work(args: argparse.Namespace, cfg: Config, secrets: Secrets) -> int:
+    from clipper.stages import Stages
+    from clipper.transcribe.whisper import Transcriber
+    from clipper.worker import run_until_idle
+
+    pools = tuple(args.pool or ("cpu", "gpu", "io"))
+    conn = db.open_db(cfg.db_path)
+    transcriber = Transcriber(cfg.transcribe, cfg.model_dir) if "gpu" in pools else None
+    llm = None
+    if secrets.anthropic_api_key is not None:
+        import anthropic
+
+        from clipper.llm.client import LLMClient
+
+        llm = LLMClient(
+            conn,
+            cfg.llm,
+            anthropic.AsyncAnthropic(api_key=secrets.anthropic_api_key.get_secret_value()),
+        )
+    elif "io" in pools:
+        _say("Uyarı: ANTHROPIC_API_KEY yok; LLM işleri (prefilter/judge) çalıştırılmayacak.")
+        pools = tuple(p for p in pools if p != "io")
+    stages = Stages(conn, cfg, transcriber=transcriber, llm=llm)
+    try:
+        stats = await run_until_idle(conn, stages.handle, pools=pools)  # type: ignore[arg-type]
+    finally:
+        if transcriber is not None:
+            transcriber.close()
+        conn.close()
+    detail = ", ".join(f"{k}={v}" for k, v in sorted(stats.by_type.items())) or "-"
+    print(f"İşler bitti: {stats.done} başarılı ({detail}), {stats.failed} hata, {stats.dead} ölü")
+    from clipper.llm.client import month_spend
+
+    conn = db.open_db(cfg.db_path)
+    try:
+        print(f"Bu ayki LLM harcaması: ${month_spend(conn):.4f}")
+    finally:
+        conn.close()
+    return 0 if stats.dead == 0 else 1
+
+
+def _print_clips(conn: sqlite3.Connection, session_id: int, show_all: bool) -> int:
+    rows = conn.execute(
+        "SELECT c.id, c.status, c.det_score, c.peak_ts, k.llm_score, k.title, k.start_rel,"
+        " k.end_rel, k.llm_json FROM candidates c LEFT JOIN clips k ON k.candidate_id = c.id"
+        " WHERE c.session_id = ? ORDER BY COALESCE(k.llm_score, -1) DESC, c.det_score DESC",
+        (session_id,),
+    ).fetchall()
+    if not rows:
+        print(f"session #{session_id} için aday yok")
+        return 1
+    import json as _json
+
+    for r in rows:
+        if not show_all and r["status"] == "rejected":
+            continue
+        data = _json.loads(r["llm_json"]) if r["llm_json"] else {}
+        reason = (data.get("judge") or data.get("prefilter") or {}).get("reason", "")
+        span = f"{r['start_rel']:.1f}-{r['end_rel']:.1f}s" if r["start_rel"] is not None else "-"
+        score = r["llm_score"] if r["llm_score"] is not None else "-"
+        print(
+            f"#{r['id']:<5} {r['status']:<12} det={r['det_score']:.2f} llm={score!s:<4}"
+            f" {span:<12} {r['title'] or ''}"
+        )
+        if reason:
+            print(f"        {reason}")
+    total = conn.execute("SELECT COUNT(*), COALESCE(SUM(usd), 0) FROM llm_usage").fetchone()
+    print(f"LLM çağrısı: {total[0]}, toplam maliyet ${total[1]:.4f}")
     return 0
 
 
@@ -225,6 +310,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             msg = f"session #{exc.args[0]} bulunamadı" if isinstance(exc, KeyError) else exc
             print(f"Hata: {msg}", file=sys.stderr)
             return 1
+        finally:
+            conn.close()
+
+    if args.command == "work":
+        from clipper.llm.client import LLMError
+
+        try:
+            return asyncio.run(_run_work(args, cfg, secrets))
+        except LLMError as exc:
+            print(f"Hata: {exc}", file=sys.stderr)
+            return 1
+
+    if args.command == "clips":
+        conn = db.open_db(cfg.db_path)
+        try:
+            return _print_clips(conn, args.session_id, args.all)
         finally:
             conn.close()
 
