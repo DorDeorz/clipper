@@ -1,4 +1,8 @@
-"""Default Turkish chat keyword / emote weights (ROADMAP 4.3). Extendable per streamer."""
+"""Default chat keyword / emote weights (ROADMAP 4.3): Turkish plus common English chat
+reactions. Extendable per streamer.
+
+Emote tokens also match prefixed variants such as Kick channel/collectible emotes
+(`rraeneeKEKW`, `collectiblesGoldenKEKW`, `HYPERCLAP` for `CLAP`)."""
 
 from __future__ import annotations
 
@@ -27,7 +31,7 @@ DEFAULT_CATEGORIES: tuple[Category, ...] = (
         "laugh",
         1.0,
         tokens=("KEKW", "OMEGALUL", "LUL", "LULW", "ICANT", "pepeLaugh", "xD"),
-        words=("xd", "sjsjsj", "ahsdj"),
+        words=("xd", "sjsjsj", "ahsdj", "lol", "lmao", "lmfao", "rofl", "im dead"),
         substrings=("😂", "🤣"),
         patterns=(r"(?:a?ha){3,}", r"(?:s?j){4,}"),
     ),
@@ -35,7 +39,7 @@ DEFAULT_CATEGORIES: tuple[Category, ...] = (
         "shock",
         1.2,
         tokens=("monkaS", "PogChamp", "Pog", "POGGERS"),
-        words=("oha", "yok artık", "nasıl ya"),
+        words=("oha", "yok artık", "nasıl ya", "omg", "wtf", "no way", "holy", "bro what"),
         substrings=("😱", "😳"),
         patterns=(r"\bohaa+\b",),
     ),
@@ -46,9 +50,13 @@ DEFAULT_CATEGORIES: tuple[Category, ...] = (
         patterns=(r"\bklipp+\b",),
     ),
     Category(
-        "praise", 0.6, tokens=("GG",), words=("efsane", "helal", "gg", "ez"), substrings=("🔥",)
+        "praise",
+        0.6,
+        tokens=("GG", "W", "CLAP", "Clap", "EZ"),
+        words=("efsane", "helal", "gg", "ez", "lets go", "let's go", "goat"),
+        substrings=("🔥",),
     ),
-    Category("fail", 0.8, tokens=("F", "RIP"), words=("rip",), substrings=("💀",)),
+    Category("fail", 0.8, tokens=("F", "RIP", "L"), words=("rip", "bruh"), substrings=("💀",)),
 )
 
 
@@ -59,6 +67,7 @@ class KeywordScorer:
     _compiled: list[tuple[Category, re.Pattern[str] | None, set[str]]] = field(
         default_factory=list, init=False, repr=False
     )
+    _suffixes: tuple[tuple[str, str], ...] = field(default=(), init=False, repr=False)
 
     def __post_init__(self) -> None:
         for cat in self.categories:
@@ -67,6 +76,25 @@ class KeywordScorer:
             alternatives += list(cat.patterns)
             rx = re.compile("|".join(alternatives)) if alternatives else None
             self._compiled.append((cat, rx, set(cat.tokens)))
+        self._suffixes = tuple(
+            (t, cat.name)
+            for cat in self.categories
+            for t in cat.tokens
+            if len(t) >= 3 and t[0].isupper()
+        )
+
+    def _prefixed_emotes(self, tokens: set[str]) -> set[str]:
+        """Category names hit by prefixed emote variants (`rraeneeKEKW`, `HYPERCLAP`)."""
+        hits: set[str] = set()
+        for tok in tokens:
+            if len(tok) < 4:
+                continue
+            for suffix, name in self._suffixes:
+                if tok != suffix and tok.endswith(suffix):
+                    prev = tok[-len(suffix) - 1]
+                    if prev.isalnum():
+                        hits.add(name)
+        return hits
 
     def score(self, text: str, emotes: list[str] | None = None) -> tuple[float, set[str]]:
         """Sum of weights of matched categories (each category counted once per message)."""
@@ -74,8 +102,13 @@ class KeywordScorer:
         folded = tr_casefold(text)
         total = 0.0
         matched: set[str] = set()
+        prefixed = self._prefixed_emotes(tokens)
         for cat, rx, cat_tokens in self._compiled:
-            if (cat_tokens & tokens) or (rx is not None and rx.search(folded)):
+            if (
+                (cat_tokens & tokens)
+                or cat.name in prefixed
+                or (rx is not None and rx.search(folded))
+            ):
                 total += cat.weight
                 matched.add(cat.name)
         for token, weight in self.extra.items():

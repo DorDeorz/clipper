@@ -24,6 +24,16 @@ from clipper.models import ChatMessage
         ("KEKW oha", 2.2, {"laugh", "shock"}),
         ("KEKW KEKW KEKW", 1.0, {"laugh"}),  # a category counts once per message
         ("selam", 0.0, set()),
+        ("LMAO", 1.0, {"laugh"}),
+        ("no way bro", 1.2, {"shock"}),
+        ("W W W", 0.6, {"praise"}),
+        ("HYPERCLAP", 0.6, {"praise"}),
+        ("rraeneeKEKW", 1.0, {"laugh"}),
+        ("collectiblesGoldenKEKW", 1.0, {"laugh"}),
+        ("Lol", 1.0, {"laugh"}),
+        ("CLAPPING", 0.0, set()),  # suffix match only, not prefix
+        ("Whatever", 0.0, set()),
+        ("lollipop", 0.0, set()),
     ],
 )
 def test_keyword_scores(text: str, expected: float, cats: set[str]) -> None:
@@ -52,9 +62,9 @@ def test_user_max_two_per_five_seconds() -> None:
 
 
 def test_repeat_spam_bonus() -> None:
-    msgs = [ChatMessage(1.0 + i * 0.1, f"u{i}", "W") for i in range(6)]
+    msgs = [ChatMessage(1.0 + i * 0.1, f"u{i}", "o7") for i in range(6)]
     bins = bin_messages(msgs)
-    # 5th and 6th distinct user repeating "W" within 5 s get +0.5 each
+    # 5th and 6th distinct user repeating "o7" within 5 s get +0.5 each
     assert bins[1].emote == pytest.approx(1.0)
 
 
