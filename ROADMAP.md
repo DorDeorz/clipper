@@ -496,11 +496,16 @@ Reddet/onay kararları ve reddetme nedenleri saklanır. Faz 8'de eşik kalibrasy
 **Bitti sayılması için:** `uv run clipper doctor` çalışıyor. `uv run pytest` yeşil. İş kuyruğu testleri (eşzamanlı claim'de çift alma yok, crash recovery) geçiyor.
 
 ### Faz 1 — Offline giriş (VOD / yerel dosya)
-- [ ] `clipper vod --video <file> --chat <jsonl> --streamer <ad>`: session oluşturur, videoyu segment gibi kaydeder (tek segment, pdt=0 tabanlı)
-- [ ] Twitch VOD indirici (kendi kodumuz: GQL token + usher VOD m3u8 + segment indirme + concat). `clipper vod --twitch-vod <id>`
-- [ ] Twitch VOD chat indirici (GQL comments, cursor ile sayfalama → jsonl). Persisted query hash'i config'te.
-- [ ] YouTube VOD: video yt-dlp ile, chat replay innertube `get_live_chat_replay` ile (anonim) → jsonl. `clipper vod --youtube <videoId>`
-- [ ] Ortak chat jsonl formatı + dönüştürücüler (TwitchDownloader JSON formatından içe aktarma da olsun, elde hazır veri varsa diye)
+- [x] `clipper vod --video <file> --chat <jsonl> --streamer <ad>`: session oluşturur, videoyu segment gibi kaydeder (tek segment, pdt=0 tabanlı)
+  - Not: chat'teki zamanlar mutlaksa (unix sn) video başına hizalanır: `--video-start` > videonun `creation_time` etiketi > ilk mesaj (uyarı loglanır). Video aynı diskteyse hardlink, değilse kopya. Ek seçenekler: `--platform`, `--channel`, `--title`.
+- [x] Twitch VOD indirici (kendi kodumuz: GQL token + usher VOD m3u8 + segment indirme + concat). `clipper vod --twitch-vod <id>`
+  - Not: `PlaybackAccessToken` ham sorgu olarak gönderiliyor (config'te persisted hash verilirse o kullanılır); usher VOD parametreleri `nauth` / `nauthsig`. Yarım kalan indirme `data/downloads/twitch-<id>/` üzerinden devam eder. fMP4 (`#EXT-X-MAP`) VOD'lar henüz desteklenmiyor. **Canlı ağ doğrulaması bekliyor** (bulut ortamından Twitch'e istek atılamadı): `uv run pytest -m online` + gerçek VOD denemesi.
+- [x] Twitch VOD chat indirici (GQL comments, cursor ile sayfalama → jsonl). Persisted query hash'i config'te.
+  - Not: hash `twitch.persisted_queries.VideoCommentsByOffsetOrCursor`. Hata mesajları hash değişimi / integrity durumunu ayrı söyler.
+- [x] YouTube VOD: video yt-dlp ile, chat replay innertube `get_live_chat_replay` ile (anonim) → jsonl. `clipper vod --youtube <videoId>`
+  - Not: key/version/continuation `/live_chat_replay?v=` yerine `/watch?v=` sayfasından alınıyor (`ytcfg` + `ytInitialData`); "tüm mesajlar" görünümü tercih ediliyor. yt-dlp Python bağımlılığı değil, PATH'teki komut olarak çağrılıyor (`config: youtube.yt_dlp`). Paid/membership mesajları `weight=1.5` ile kaydediliyor. Canlı ağ doğrulaması bekliyor.
+- [x] Ortak chat jsonl formatı + dönüştürücüler (TwitchDownloader JSON formatından içe aktarma da olsun, elde hazır veri varsa diye)
+  - Not: `src/clipper/chatlog.py`; `.jsonl` / `.jsonl.gz` okur-yazar. `clipper chat-import <td.json> <out.jsonl.gz>` komutu eklendi; `--chat` TwitchDownloader `.json` dosyasını doğrudan da kabul eder.
 
 **Bitti sayılması için:** Gerçek bir Twitch VOD'u (kısa, 30–60 dk) video + chat olarak indirilip session'a dönüşüyor. Fixture ile aynı akış testte çalışıyor.
 
