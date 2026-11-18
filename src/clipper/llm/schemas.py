@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import copy
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -18,6 +18,24 @@ class PrefilterDecision(_Out):
     reason: str
 
     @field_validator("rough_score")
+    @classmethod
+    def _clamp(cls, v: int) -> int:
+        return max(0, min(100, v))
+
+
+ContentKind = Literal["story", "joke", "rant", "argument", "reaction", "info", "none"]
+
+
+class ContentScanDecision(_Out):
+    """r3 content path: one transcript window. Times are seconds from the window start."""
+
+    score: int
+    kind: ContentKind
+    reason: str
+    best_start: float
+    best_end: float
+
+    @field_validator("score")
     @classmethod
     def _clamp(cls, v: int) -> int:
         return max(0, min(100, v))

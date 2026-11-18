@@ -670,10 +670,15 @@ Reddet/onay kararları `feedback` tablosuna yazılır (bkz. 4.9). Reddet butonu 
 - [x] prefilter ve judge işleri, saatlik aday sınırı, kelime sınırına snap
   - Not: işler `clipper work` ile kuyruk boşalana kadar çalışır (`clipper run` Faz 5/6'da). Sonuçlar `clipper clips <session_id> [--all]` ile görülür.
   - Not: saatlik sınır için judge işleri prefilter puanına göre sıralanır (yüksek puan önce), saat dilimi dolunca kalanlar "saatlik aday sınırı doldu" gerekçesiyle reddedilir. Son başlıklar, yayınlama gelene kadar yayıncının daha önce judge'dan geçmiş klip başlıklarından alınıyor.
-- [ ] (r3) **İçerik yolu toplu modu**: VOD'un tam transkripti çıkarılır (faster-whisper large-v3), ContentScanner aynı mantıkla 60 sn adımla tüm VOD'u tarar. Canlıdaki kodla **aynı sınıf**, sadece zaman kaynağı farklı.
-- [ ] (r3) Konuşma hızı ve anahtar laf sinyalleri (4.3b) dedektöre beslenir
-- [ ] (r3) Judge prompt'una few-shot geri bildirim bloğu (4.9 Kademe 1). Veri yoksa blok boş geçilir.
-- [ ] (r3) Testler: sessiz pencere atlanıyor, art arda iki yüksek skorlu pencere birleşiyor, 3 dk sınırı uygulanıyor
+- [x] (r3) **İçerik yolu toplu modu**: VOD'un tam transkripti çıkarılır (faster-whisper large-v3), ContentScanner aynı mantıkla 60 sn adımla tüm VOD'u tarar. Canlıdaki kodla **aynı sınıf**, sadece zaman kaynağı farklı.
+  - Not: `clipper vod` reaktif dedektörden sonra `session_transcribe` (gpu, öncelik 300: klip transkriptlerinden sonra) işini kuyruğa atar; bitince `content_scan` (io) gelir. İkisi de `clipper work` ile çalışır. Transkript `data/sessions/<id>/live_transcript.jsonl` (`content/transcript.py`). Tarayıcı `content/scanner.py` (`ContentScanner`, `ContentAccumulator`), toplu sürücü `content/batch.py`. İçerik adayı mevcut bir adayla ±`merge.radius_seconds` çakışırsa o adaya `content` kaynağı eklenir, yoksa yeni aday + `cut` işi.
+  - Sapma: Haiku çıktısı tool use yerine yapılandırılmış çıktı ile alınıyor (Faz 3'teki gerekçeyle aynı).
+  - Bekleyen: klip `transcribe` işinin hazır tam transkripti kullanıp sadece kenarları yeniden yazması (4.3b "Kazanç") şimdilik yok; klip transkripti eskisi gibi raw.wav'dan çıkarılıyor.
+- [x] (r3) Konuşma hızı ve anahtar laf sinyalleri (4.3b) dedektöre beslenir
+  - Not: dedektöre iki yeni özellik: `speech` (kelime/sn) ve `vkw` (yayıncının ağzından çıkan şok/gülme kelimeleri), ağırlıklar 0.10 / 0.10. Transkript olmayan saniyelerde z=0 ve baseline güncellenmez. VOD'da transkript `clipper work` ile sonradan geldiği için etkisi `clipper detect --force <id>` ile görülür (adaylar henüz işlenmediyse).
+- [x] (r3) Judge prompt'una few-shot geri bildirim bloğu (4.9 Kademe 1). Veri yoksa blok boş geçilir.
+  - Not: judge'a ayrıca adayın kaynakları, içerik yolunun `kind`/`reason`'ı, izleyici klipleri ve penceredeki platform olayları gidiyor (4.5 r3). `sources` ≥ 2 ise prefilter atlanıyor.
+- [x] (r3) Testler: sessiz pencere atlanıyor, art arda iki yüksek skorlu pencere birleşiyor, 3 dk sınırı uygulanıyor
 - [x] Testler: LLM istemcisi `httpx.MockTransport` ile (SDK'ya custom http_client verilerek), geçersiz JSON → tekrar deneme, bütçe aşımı → Haiku'ya düşme
   - Not: anthropic SDK 2.x `httpx2` üzerine kurulu, testler `httpx2.MockTransport` + `anthropic.DefaultAsyncHttpxClient(transport=...)` kullanıyor.
   - Bekleyen: "Bitti" maddesi için gerçek bir VOD'da `ANTHROPIC_API_KEY` ile `clipper work` çalıştırılması ve `llm_usage` maliyetinin ölçülmesi.

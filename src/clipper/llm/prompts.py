@@ -138,6 +138,80 @@ def prefilter_user(
     )
 
 
+SOURCE_LABELS = {
+    "reactive": "chat/ses tepkisi",
+    "content": "konuşma içeriği",
+    "viewer_clip": "izleyici klibi",
+}
+EVENT_LABELS = {
+    "sub": "abonelik",
+    "gift_sub": "hediye abonelik",
+    "bits": "bits",
+    "raid": "raid",
+    "donation": "bağış",
+    "superchat": "superchat",
+    "membership": "üyelik",
+}
+REJECT_LABELS = {
+    "not_funny": "komik değil",
+    "no_context": "bağlamsız",
+    "bad_cut": "kötü kesim",
+    "duplicate": "tekrar",
+    "music": "müzik",
+    "sensitive": "hassas",
+    "low_quality": "kalitesiz",
+    "other": "diğer",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class FeedbackExamples:
+    approved_titles: list[str]
+    rejected: list[tuple[str, int]]  # (reason, count), most common first
+
+
+def candidate_context(features: dict[str, Any]) -> str:
+    """r3 lines for the judge: which paths found this moment, what the content path
+    heard, and platform events that happened in the window."""
+    lines: list[str] = []
+    sources = features.get("sources") or ["reactive"]
+    lines.append("Bulan yollar: " + ", ".join(SOURCE_LABELS.get(s, s) for s in sources))
+    content = features.get("content")
+    if isinstance(content, dict) and content.get("reason"):
+        lines.append(
+            f"İçerik yolu: {content.get('kind', '?')} ({content.get('score', '?')}/100)"
+            f" - {content['reason']}"
+        )
+    clips = features.get("viewer_clips")
+    if isinstance(clips, list) and clips:
+        titles = ", ".join(f'"{c.get("title")}"' for c in clips[:3] if c.get("title"))
+        lines.append(f"İzleyici klipleri: {len(clips)}" + (f" ({titles})" if titles else ""))
+    events = features.get("events") or {}
+    if events:
+        parts = [f"{EVENT_LABELS.get(k, k)}: {v:g}" for k, v in events.items()]
+        lines.append("Bu sırada platform olayları: " + ", ".join(parts))
+    if features.get("event_filter"):
+        lines.append(
+            "Not: bu an bir abone yağmuru/raid sonrasına denk geliyor; chat tepkisi olaydan"
+            " değil o yüzden olabilir."
+        )
+    return "\n".join(lines)
+
+
+def feedback_block(fb: FeedbackExamples | None) -> str:
+    if fb is None or (not fb.approved_titles and not fb.rejected):
+        return ""
+    out = ["## Bu yayıncı için kullanıcı geri bildirimi"]
+    if fb.approved_titles:
+        out.append("Son onaylanan kliplerin başlıkları (kullanıcının sevdiği türden anlar):")
+        out += [f"- {t}" for t in fb.approved_titles]
+    if fb.rejected:
+        reasons = ", ".join(f"{REJECT_LABELS.get(r, r)} ×{n}" for r, n in fb.rejected)
+        out.append(f"Son reddedilen kliplerin red nedenleri: {reasons}")
+        out.append("Bu nedenlere uyan anlara daha düşük puan ver.")
+    return "\n".join(out)
+
+
 def judge_user(
     streamer: str,
     category: str | None,
@@ -146,13 +220,18 @@ def judge_user(
     chat: str,
     audio: str,
     recent_titles: list[str],
+    context: str = "",
+    feedback: str = "",
 ) -> str:
     titles = "\n".join(f"- {t}" for t in recent_titles) or "(henüz yok)"
+    extra = f"\n{context}" if context else ""
+    tail = f"\n\n{feedback}" if feedback else ""
     return (
         f"Yayıncı: {streamer}\nKategori: {category or 'bilinmiyor'}\n"
-        f"Ham kesit süresi: {duration:.1f} sn\n\n"
+        f"Ham kesit süresi: {duration:.1f} sn{extra}\n\n"
         f"## Transkript\n{transcript}\n\n## Chat (saniye: adet | örnekler)\n{chat}\n\n"
         f"## Ses enerjisi (saniye:dBFS)\n{audio}\n\n## Son yayınlanan başlıklar\n{titles}"
+        f"{tail}"
     )
 
 

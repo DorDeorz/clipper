@@ -10,7 +10,7 @@ from typing import Any
 
 from clipper.config import DetectorConfig
 
-FEATURES = ("rate", "uniq", "emote", "audio")
+FEATURES = ("rate", "uniq", "emote", "audio", "speech", "vkw")
 Z_MIN, Z_MAX = -2.0, 10.0
 
 
@@ -24,6 +24,8 @@ class Observation:
     chat_ok: bool = True  # False while the chat connection is down
     threshold_mult: float = 1.0  # r3 event filter: >1 after a sub train
     suppressed: bool = False  # r3 event filter: reactive trigger closed (raid)
+    speech: float | None = None  # r3: words spoken this second (None = no transcript)
+    vkw: float = 0.0  # r3: keyword score of what the streamer said this second
 
 
 @dataclass(slots=True)
@@ -74,8 +76,9 @@ class Detector:
         self.cfg = cfg
         self.history: list[ScoreRow] = []
         self._win: dict[str, deque[float]] = {
-            k: deque(maxlen=cfg.burst_window) for k in ("rate", "uniq", "emote")
+            k: deque(maxlen=cfg.burst_window) for k in ("rate", "uniq", "emote", "speech", "vkw")
         }
+        self._speech_known: deque[bool] = deque(maxlen=cfg.burst_window)
         self._audio: dict[int, float] = {}
         self._base = {k: _Ewma(cfg.baseline_halflife) for k in FEATURES}
         self._start: int | None = None
@@ -121,6 +124,9 @@ class Detector:
         self._win["rate"].append(obs.msgs)
         self._win["uniq"].append(obs.uniq)
         self._win["emote"].append(obs.emote)
+        self._win["speech"].append(obs.speech or 0.0)
+        self._win["vkw"].append(obs.vkw)
+        self._speech_known.append(obs.speech is not None)
         if obs.audio_db is not None:
             self._audio[obs.t] = obs.audio_db
         self._audio.pop(obs.t - int(cfg.lag_seconds) - cfg.burst_window - 5, None)
@@ -141,6 +147,15 @@ class Detector:
             z["audio"] = (audio_x - b.mean) / max(b.std, floors.audio)
         else:
             z["audio"] = 0.0
+        speech_known = any(self._speech_known)
+        for k in ("speech", "vkw"):
+            if speech_known:
+                x[k] = float(sum(self._win[k]))
+                b = self._base[k]
+                denom = max(b.std, getattr(floors, k), math.sqrt(max(b.mean, 0.0)))
+                z[k] = (x[k] - b.mean) / denom if b.n else 0.0
+            else:
+                z[k] = 0.0
         w = cfg.weights
         score = sum(getattr(w, k) * min(max(z[k], Z_MIN), Z_MAX) for k in FEATURES)
         self.history.append(ScoreRow(obs.t, score, z, x))
@@ -173,6 +188,9 @@ class Detector:
                 self._base[k].update(x[k], slow=slow)
             if audio_x is not None:
                 self._base["audio"].update(audio_x, slow=slow)
+            if speech_known:
+                for k in ("speech", "vkw"):
+                    self._base[k].update(x[k], slow=slow)
 
         if (
             self._pending is not None

@@ -150,7 +150,15 @@ async def _run_vod(args: argparse.Namespace, cfg: Config) -> int:
             f" {result.chat_count} chat mesajı ({result.session_dir})"
         )
         if not args.no_detect:
-            return await _detect_and_report(conn, cfg, result.session_id, False, True)
+            rc = await _detect_and_report(conn, cfg, result.session_id, False, True)
+            from clipper.content.batch import enqueue_content_path
+
+            if enqueue_content_path(conn, cfg, result.session_id):
+                print(
+                    "İçerik yolu kuyruğa alındı: tam transkript + içerik taraması"
+                    " `clipper work` ile çalışır."
+                )
+            return rc
     finally:
         conn.close()
     return 0

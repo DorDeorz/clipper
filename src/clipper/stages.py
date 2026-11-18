@@ -16,11 +16,20 @@ from typing import Any
 
 from clipper import chatlog, jobs
 from clipper.config import Config
+from clipper.content.batch import (
+    CONTENT_SCAN_PRIORITY,
+    scan_session,
+    transcribe_session,
+)
+from clipper.content.scanner import ContentScanner
 from clipper.llm.client import LLMClient, LLMRefused
 from clipper.llm.prompts import (
     PREFILTER_SYSTEM,
+    FeedbackExamples,
     audio_profile,
+    candidate_context,
     chat_timeline,
+    feedback_block,
     judge_system,
     judge_user,
     prefilter_user,
@@ -31,6 +40,7 @@ from clipper.llm.prompts import (
 )
 from clipper.llm.schemas import JudgeDecision, PrefilterDecision
 from clipper.log import get_logger
+from clipper.media import MediaError
 from clipper.models import ChatMessage
 from clipper.recorder.cutter import cut
 from clipper.sessions import CHAT_FILE
@@ -42,6 +52,7 @@ log = get_logger("stages")
 PREFILTER_PRIORITY = 20
 JUDGE_PRIORITY_BASE = 100
 RECENT_TITLES = 30
+FEEDBACK_EXAMPLES = 20
 
 
 class StageError(Exception):
@@ -128,6 +139,13 @@ class Stages:
     # ---- handlers ------------------------------------------------------------------------
 
     async def handle(self, job: jobs.Job) -> None:
+        session_handler = {
+            "session_transcribe": self.handle_session_transcribe,
+            "content_scan": self.handle_content_scan,
+        }.get(job.type)
+        if session_handler is not None:
+            await session_handler(int(job.payload["session_id"]), job.payload)
+            return
         handler = {
             "cut": self.handle_cut,
             "transcribe": self.handle_transcribe,
@@ -137,6 +155,33 @@ class Stages:
         if handler is None:
             raise StageError(f"bilinmeyen iş tipi: {job.type}", retry=False)
         await handler(int(job.payload["candidate_id"]), job.payload)
+
+    async def handle_session_transcribe(self, session_id: int, payload: dict[str, Any]) -> None:
+        """r3 content path, VOD mode: transcribe the whole session, then queue the scan."""
+        if self.transcriber is None:
+            raise StageError("transkript motoru hazır değil")
+        try:
+            await transcribe_session(self.conn, self.cfg, session_id, self.transcriber)
+        except MediaError as exc:
+            raise StageError(str(exc), retry=False) from exc
+        jobs.enqueue(
+            self.conn, "content_scan", {"session_id": session_id}, "io", CONTENT_SCAN_PRIORITY
+        )
+
+    async def handle_content_scan(self, session_id: int, payload: dict[str, Any]) -> None:
+        llm = self._require_llm()
+        cfg = self.cfg
+
+        def factory(sess: sqlite3.Row, baseline: float | None) -> ContentScanner:
+            return ContentScanner(
+                cfg.content_scan,
+                llm,
+                streamer=sess["streamer"],
+                category=sess["category"],
+                chat_rate_baseline=baseline,
+            )
+
+        await scan_session(self.conn, cfg, session_id, factory)
 
     async def handle_cut(self, candidate_id: int, payload: dict[str, Any]) -> None:
         cand = self._candidate(candidate_id)
@@ -179,6 +224,20 @@ class Stages:
             "UPDATE clips SET transcript_path = ? WHERE candidate_id = ?", (str(out), candidate_id)
         )
         self._set_status(candidate_id, "transcribed")
+        cand = self._candidate(candidate_id)
+        sources = json.loads(cand["sources"]) if cand["sources"] else ["reactive"]
+        if len(sources) >= 2:
+            # r3: found by several paths -> strong enough to skip the Haiku prefilter.
+            clip = self._clip(candidate_id)
+            assert clip is not None
+            data = self._llm_json(clip)
+            data["prefilter"] = {"keep": True, "skipped": "multi_source", "sources": sources}
+            self._save_llm_json(candidate_id, data)
+            self._set_status(candidate_id, "prefiltered")
+            jobs.enqueue(
+                self.conn, "judge", {"candidate_id": candidate_id}, "io", JUDGE_PRIORITY_BASE
+            )
+            return
         jobs.enqueue(
             self.conn, "prefilter", {"candidate_id": candidate_id}, "io", PREFILTER_PRIORITY
         )
@@ -253,6 +312,25 @@ class Stages:
         ).fetchall()
         return [r[0] for r in rows]
 
+    def feedback_examples(self, streamer_id: int) -> FeedbackExamples:
+        """4.9 Kademe 1: the streamer's latest approvals (titles) and rejection reasons."""
+        approved = self.conn.execute(
+            "SELECT k.title FROM feedback f JOIN clips k ON k.id = f.clip_id"
+            " JOIN candidates c ON c.id = k.candidate_id JOIN sessions s ON s.id = c.session_id"
+            " WHERE s.streamer_id = ? AND f.decision IN ('approved', 'edited')"
+            " AND k.title IS NOT NULL ORDER BY f.created_at DESC LIMIT ?",
+            (streamer_id, FEEDBACK_EXAMPLES),
+        ).fetchall()
+        rejected = self.conn.execute(
+            "SELECT COALESCE(f.reason, 'other') AS reason, COUNT(*) FROM ("
+            " SELECT f.reason FROM feedback f JOIN clips k ON k.id = f.clip_id"
+            " JOIN candidates c ON c.id = k.candidate_id JOIN sessions s ON s.id = c.session_id"
+            " WHERE s.streamer_id = ? AND f.decision = 'rejected'"
+            " ORDER BY f.created_at DESC LIMIT ?) f GROUP BY 1 ORDER BY 2 DESC",
+            (streamer_id, FEEDBACK_EXAMPLES),
+        ).fetchall()
+        return FeedbackExamples([r[0] for r in approved], [(r[0], int(r[1])) for r in rejected])
+
     async def handle_judge(self, candidate_id: int, payload: dict[str, Any]) -> None:
         llm = self._require_llm()
         cand = self._candidate(candidate_id)
@@ -286,6 +364,8 @@ class Stages:
             chat,
             audio,
             self.recent_titles(cand["streamer_id"], candidate_id),
+            context=candidate_context(json.loads(cand["features"])),
+            feedback=feedback_block(self.feedback_examples(cand["streamer_id"])),
         )
         model, downgraded = llm.judge_model()
         try:

@@ -53,7 +53,7 @@ def test_analyze_fixture_session(session: int, tmp_path: Path, conn: sqlite3.Con
         assert c["status"] == "new"
         feats = json.loads(c["features"])
         assert feats["top_messages"] and feats["top_messages"][0]["text"] in sp.texts
-        assert set(feats["z"]) == {"rate", "uniq", "emote", "audio"}
+        assert set(feats["z"]) == {"rate", "uniq", "emote", "audio", "speech", "vkw"}
     cut_jobs = conn.execute("SELECT payload FROM jobs WHERE type = 'cut'").fetchall()
     assert sorted(json.loads(j[0])["candidate_id"] for j in cut_jobs) == res.candidate_ids
 
