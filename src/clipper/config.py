@@ -121,6 +121,10 @@ class LLMConfig(_Strict):
     max_candidates_per_hour: int = 12
     min_keep_score: int = 65
     monthly_budget_usd: float = 30
+    prefilter_effort: Literal["low", "medium", "high", "xhigh", "max"] = "low"
+    judge_effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
+    # Server-side refusal fallback (beta) for models that support it.
+    refusal_fallback: bool = True
 
 
 class RenderConfig(_Strict):
@@ -192,6 +196,10 @@ class Config(_Strict):
     @property
     def log_dir(self) -> Path:
         return self.paths.data_dir / "logs"
+
+    @property
+    def model_dir(self) -> Path:
+        return self.paths.data_dir / "models"
 
 
 class ConfigError(Exception):

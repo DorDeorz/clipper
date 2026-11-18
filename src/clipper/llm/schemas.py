@@ -1,0 +1,119 @@
+"""LLM output schemas (pydantic) and their strict JSON-schema form for structured outputs."""
+
+from __future__ import annotations
+
+import copy
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+class _Out(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+
+class PrefilterDecision(_Out):
+    keep: bool
+    rough_score: int
+    reason: str
+
+    @field_validator("rough_score")
+    @classmethod
+    def _clamp(cls, v: int) -> int:
+        return max(0, min(100, v))
+
+
+class CaptionFix(_Out):
+    from_: str = Field(alias="from")
+    to: str
+
+
+class YouTubeText(_Out):
+    title: str
+    description: str
+
+
+class CaptionText(_Out):
+    caption: str
+
+
+class XText(_Out):
+    text: str
+
+
+class PlatformTexts(_Out):
+    youtube: YouTubeText
+    instagram: CaptionText
+    tiktok: CaptionText
+    x: XText
+
+
+class Flags(_Out):
+    music_risk: bool
+    nsfw: bool
+    sensitive_topic: bool
+    needs_context: bool
+
+    @property
+    def clean(self) -> bool:
+        return not (self.music_risk or self.nsfw or self.sensitive_topic)
+
+
+class JudgeDecision(_Out):
+    keep: bool
+    score: int
+    reason: str
+    start: float
+    end: float
+    title: str
+    hook: str
+    caption_fixes: list[CaptionFix]
+    hashtags: list[str]
+    texts: PlatformTexts
+    flags: Flags
+
+    @field_validator("score")
+    @classmethod
+    def _clamp(cls, v: int) -> int:
+        return max(0, min(100, v))
+
+    @field_validator("title")
+    @classmethod
+    def _title_len(cls, v: str) -> str:
+        if len(v) > 100:
+            raise ValueError("başlık 100 karakterden uzun")
+        return v
+
+    @field_validator("end")
+    @classmethod
+    def _end_after_start(cls, v: float, info: Any) -> float:
+        start = info.data.get("start")
+        if start is not None and v <= start:
+            raise ValueError("end, start'tan büyük olmalı")
+        return v
+
+
+_DROP = {"title", "default", "minimum", "maximum", "minLength", "maxLength", "description"}
+
+
+def strict_schema(model: type[BaseModel]) -> dict[str, Any]:
+    """Pydantic JSON schema -> self-contained strict schema for `output_config.format`:
+    refs inlined, every object closed (`additionalProperties: false`) with all keys
+    required. Range checks stay in pydantic validators."""
+    raw = model.model_json_schema(by_alias=True)
+    defs = raw.pop("$defs", {})
+
+    def walk(node: Any) -> Any:
+        if isinstance(node, dict):
+            if "$ref" in node:
+                return walk(copy.deepcopy(defs[node["$ref"].rsplit("/", 1)[-1]]))
+            out = {k: walk(v) for k, v in node.items() if k not in _DROP}
+            if out.get("type") == "object" and "properties" in out:
+                out["additionalProperties"] = False
+                out["required"] = list(out["properties"])
+            return out
+        if isinstance(node, list):
+            return [walk(v) for v in node]
+        return node
+
+    return walk(raw)

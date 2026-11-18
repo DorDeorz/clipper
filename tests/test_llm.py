@@ -1,0 +1,194 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import sqlite3
+import time
+
+import pytest
+
+from clipper.config import LLMConfig
+from clipper.llm.client import LLMClient, LLMError, LLMRefused, cost_usd, month_spend
+from clipper.llm.prompts import (
+    Word,
+    apply_caption_fixes,
+    chat_timeline,
+    judge_system,
+    snap_to_words,
+)
+from clipper.llm.schemas import JudgeDecision, PrefilterDecision, strict_schema
+from clipper.models import ChatMessage
+from tests.llm_mock import FakeAnthropic, judge_payload, message
+
+
+def _client(conn: sqlite3.Connection, fake: FakeAnthropic, **cfg: object) -> LLMClient:
+    return LLMClient(conn, LLMConfig(**cfg), fake.client())  # type: ignore[arg-type]
+
+
+def _prefilter(llm: LLMClient, model: str = "claude-haiku-5-5"):  # type: ignore[no-untyped-def]
+    return asyncio.run(
+        llm.structured(
+            purpose="prefilter",
+            model=model,
+            system="sys",
+            user="user",
+            schema=PrefilterDecision,
+            effort="low",
+        )
+    )
+
+
+def test_structured_output_request_shape(conn: sqlite3.Connection) -> None:
+    fake = FakeAnthropic([lambda b: json.dumps({"keep": True, "rough_score": 70, "reason": "iyi"})])
+    res = _prefilter(_client(conn, fake))
+    assert res.value.keep and res.value.rough_score == 70 and res.attempts == 1
+    body = fake.requests[0]
+    assert body["model"] == "claude-haiku-5-5"
+    assert body["system"][0]["cache_control"] == {"type": "ephemeral"}
+    fmt = body["output_config"]["format"]
+    assert fmt["type"] == "json_schema"
+    assert fmt["schema"]["additionalProperties"] is False
+    assert set(fmt["schema"]["required"]) == {"keep", "rough_score", "reason"}
+    assert body["output_config"]["effort"] == "low"
+    assert "tool_choice" not in body
+    # Haiku has no server-side fallback -> plain endpoint.
+    assert fake.betas[0] == ""
+
+
+def test_invalid_json_is_retried_once(conn: sqlite3.Connection) -> None:
+    fake = FakeAnthropic(
+        [
+            lambda b: "bu json değil",
+            lambda b: json.dumps({"keep": False, "rough_score": 10, "reason": "spam"}),
+        ]
+    )
+    res = _prefilter(_client(conn, fake))
+    assert res.attempts == 2 and res.value.keep is False
+    second = fake.requests[1]["messages"]
+    assert [m["role"] for m in second] == ["user", "assistant", "user"]
+    assert "şemaya uymadı" in second[2]["content"]
+    rows = conn.execute("SELECT COUNT(*) FROM llm_usage").fetchone()[0]
+    assert rows == 2
+
+
+def test_invalid_twice_raises(conn: sqlite3.Connection) -> None:
+    fake = FakeAnthropic([lambda b: "{}", lambda b: "{}"])
+    with pytest.raises(LLMError):
+        _prefilter(_client(conn, fake))
+
+
+def test_semantic_validation_triggers_retry(conn: sqlite3.Connection) -> None:
+    bad = judge_payload(start=30.0, end=10.0)
+    fake = FakeAnthropic([lambda b: json.dumps(bad), lambda b: json.dumps(judge_payload())])
+    llm = _client(conn, fake)
+    res = asyncio.run(
+        llm.structured(
+            purpose="judge",
+            model="claude-sonnet-5-5",
+            system="s",
+            user="u",
+            schema=JudgeDecision,
+            effort="medium",
+        )
+    )
+    assert res.attempts == 2
+    assert res.value.caption_fixes[0].from_ == "valoran"
+    # Sonnet 5.5 goes through the server-side refusal fallback beta.
+    assert "server-side-fallback-2026-07-01" in fake.betas[0]
+    assert fake.requests[0]["fallbacks"] == "default"
+
+
+def test_cost_recorded(conn: sqlite3.Connection) -> None:
+    fake = FakeAnthropic(
+        [
+            lambda b: message(
+                b["model"],
+                json.dumps({"keep": True, "rough_score": 60, "reason": "x"}),
+                inp=10_000,
+                out=1_000,
+                cache_read=5_000,
+            )
+        ]
+    )
+    res = _prefilter(_client(conn, fake))
+    expected = cost_usd("claude-haiku-5-5", 10_000, 1_000, 5_000, 0)
+    assert res.usd == pytest.approx(expected)
+    assert expected == pytest.approx((10_000 * 0.10 + 1_000 * 0.50 + 5_000 * 0.01) / 1e6)
+    row = conn.execute("SELECT model, purpose, usd, cache_read FROM llm_usage").fetchone()
+    assert row["model"] == "claude-haiku-5-5" and row["purpose"] == "prefilter"
+    assert row["cache_read"] == 5_000
+    assert month_spend(conn) == pytest.approx(round(expected, 6))
+
+
+def test_budget_exceeded_downgrades_judge(conn: sqlite3.Connection) -> None:
+    llm = _client(conn, FakeAnthropic(), monthly_budget_usd=1.0)
+    assert llm.judge_model() == ("claude-sonnet-5-5", False)
+    conn.execute(
+        "INSERT INTO llm_usage (ts, model, purpose, input_tokens, output_tokens, cache_read, usd)"
+        " VALUES (?, 'claude-sonnet-5-5', 'judge', 0, 0, 0, 1.5)",
+        (time.time(),),
+    )
+    assert llm.judge_model() == ("claude-haiku-5-5", True)
+
+
+def test_last_month_spend_not_counted(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "INSERT INTO llm_usage (ts, model, purpose, input_tokens, output_tokens, cache_read, usd)"
+        " VALUES (?, 'm', 'judge', 0, 0, 0, 99)",
+        (time.time() - 40 * 86400,),
+    )
+    assert month_spend(conn) == 0
+
+
+def test_refusal_raises(conn: sqlite3.Connection) -> None:
+    fake = FakeAnthropic([lambda b: message(b["model"], "", stop="refusal")])
+    with pytest.raises(LLMRefused):
+        _prefilter(_client(conn, fake))
+
+
+def test_strict_schema_is_self_contained() -> None:
+    schema = strict_schema(JudgeDecision)
+    text = json.dumps(schema)
+    assert "$ref" not in text and "$defs" not in text
+    assert schema["properties"]["caption_fixes"]["items"]["required"] == ["from", "to"]
+    assert schema["properties"]["texts"]["additionalProperties"] is False
+
+
+def test_judge_system_formats_lengths() -> None:
+    s = judge_system(12, 59)
+    assert "12-59 saniye" in s and '{"from": "yanlış"' in s
+
+
+def test_snap_to_words() -> None:
+    words = [Word("a", 1.0, 1.4), Word("b", 5.0, 5.5), Word("c", 30.0, 30.6), Word("d", 41, 41.5)]
+    start, end = snap_to_words(4.6, 31.0, words, duration=80, min_len=12, max_len=59)
+    assert start == pytest.approx(4.85) and end == pytest.approx(30.9)
+    # Too short -> extended to min_len.
+    start, end = snap_to_words(5.0, 6.0, words, duration=80, min_len=12, max_len=59)
+    assert end - start == pytest.approx(12)
+    # Too long -> cut to max_len, never past duration.
+    start, end = snap_to_words(0, 200, [], duration=70, min_len=12, max_len=59)
+    assert (start, end) == (0, 59)
+    start, end = snap_to_words(60, 70, [], duration=65, min_len=12, max_len=59)
+    assert end == 65 and end - start == pytest.approx(12)
+
+
+def test_caption_fixes() -> None:
+    tr = [
+        {
+            "start": 0,
+            "end": 1,
+            "text": "valoran oynuyoruz, valoran!",
+            "words": [{"w": "valoran", "s": 0, "e": 0.5, "p": 0.9}],
+        }
+    ]
+    out = apply_caption_fixes(tr, [("valoran", "Valorant")])
+    assert out[0]["text"] == "Valorant oynuyoruz, Valorant!"
+    assert out[0]["words"][0]["w"] == "Valorant"
+
+
+def test_chat_timeline_relative_seconds() -> None:
+    msgs = [ChatMessage(ts=100 + i * 0.5, user_id=f"u{i}", text="KEKW") for i in range(6)]
+    out = chat_timeline(msgs, 100, 110)
+    assert out.splitlines()[0] == "0: 2 | KEKW"
+    assert chat_timeline([], 0, 10) == "(chat yok)"
