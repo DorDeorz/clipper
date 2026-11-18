@@ -21,15 +21,19 @@ class ChatMessage:
     text: str
     emotes: list[str] = field(default_factory=list)
     platform: str = "local"
+    weight: float = 1.0  # e.g. 1.5 for YouTube paid / membership messages
 
     def to_json(self) -> dict[str, Any]:
-        return {
+        data: dict[str, Any] = {
             "ts": self.ts,
             "user_id": self.user_id,
             "text": self.text,
             "emotes": list(self.emotes),
             "platform": self.platform,
         }
+        if self.weight != 1.0:
+            data["weight"] = self.weight
+        return data
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> ChatMessage:
@@ -39,6 +43,7 @@ class ChatMessage:
             text=str(data["text"]),
             emotes=[str(e) for e in data.get("emotes", [])],
             platform=str(data.get("platform", "local")),
+            weight=float(data.get("weight", 1.0)),
         )
 
 
