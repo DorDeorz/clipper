@@ -218,7 +218,7 @@ def test_restart_spawns_new_process(monkeypatch: pytest.MonkeyPatch) -> None:
     from clipper import __main__ as cli
 
     calls: list[list[str]] = []
-    monkeypatch.setattr("subprocess.Popen", lambda args: calls.append(args))
+    monkeypatch.setattr("subprocess.Popen", lambda args, **kw: calls.append(args))
     cli._restart(["--config", "c.yaml", "run"])
     assert calls[0][1:] == ["-m", "clipper", "--config", "c.yaml", "run", "--no-browser"]
     assert generate_key()  # keygen still available

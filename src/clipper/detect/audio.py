@@ -8,6 +8,8 @@ from pathlib import Path
 
 import numpy as np
 
+from clipper.util.proc import no_window
+
 SAMPLE_RATE = 16_000
 SILENCE_DB = -90.0
 
@@ -42,6 +44,7 @@ async def segment_db(path: Path, pdt_start: float, ffmpeg: str = "ffmpeg") -> di
         "-",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,
+        **no_window(),
     )
     assert proc.stdout is not None
     out: dict[int, float] = {}
