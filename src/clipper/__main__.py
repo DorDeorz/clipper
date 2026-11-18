@@ -465,7 +465,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         results = asyncio.run(
             run_all(cfg, args.out, only=args.only or (), llm_mode=args.llm, api_key=key, say=_say)
         )
-        report = write_report(results, args.reports, args.llm)
+        report = write_report(results, args.reports, args.llm, args.out / "metrics.csv")
         passed = sum(r.ok for r in results)
         _say(f"Sonuç: {passed}/{len(results)} senaryo geçti. Rapor: {report}")
         return 0 if passed == len(results) else 1

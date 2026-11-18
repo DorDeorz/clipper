@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import sqlite3
 import subprocess
 import time
@@ -279,8 +280,6 @@ async def run_scenario(
     built = build(s, out_dir / "inputs", video=True, ffmpeg=base.paths.ffmpeg)
     work = out_dir / "runs" / s.id
     if (work / "data").exists():
-        import shutil
-
         shutil.rmtree(work / "data")
     llm_cfg = base.llm.model_copy(
         update={
@@ -401,26 +400,62 @@ async def run_all(
     llm_cache: Path | None = None,
     api_key: str | None = None,
     say: Callable[[str], None] = print,
+    monitor_interval: float = 10.0,
 ) -> list[ScenarioResult]:
+    from clipper.evals.monitor import ResourceMonitor
+
     results = []
-    for s in SCENARIOS:
-        if only and s.id not in only:
-            continue
-        say(f"{s.id} {s.title}...")
-        r = await run_scenario(
-            s, base, out_dir, llm_mode=llm_mode, llm_cache=llm_cache, api_key=api_key
-        )
-        bad = [c for c in r.checks if not c.ok]
-        say(
-            f"  {'GEÇTİ' if r.ok else 'KALDI'} ({r.seconds} sn, {len(r.clips)} klip)"
-            + (f" hata: {r.error}" if r.error else "")
-            + "".join(f"\n    - {c.name}: {c.detail}" for c in bad)
-        )
-        results.append(r)
+    current: list[Path] = []
+    out_dir.mkdir(parents=True, exist_ok=True)
+    metrics = out_dir / "metrics.csv"
+    metrics.unlink(missing_ok=True)
+    monitor = ResourceMonitor(
+        metrics,
+        disk=out_dir,
+        db=lambda: current[-1] if current else None,
+        interval=monitor_interval,
+    )
+    async with monitor:
+        for s in SCENARIOS:
+            if only and s.id not in only:
+                continue
+            # Clear the previous run's data before the monitor looks at this DB (on
+            # Windows an open read handle would make run_scenario's rmtree fail).
+            shutil.rmtree(out_dir / "runs" / s.id / "data", ignore_errors=True)
+            current.append(out_dir / "runs" / s.id / "data" / "clipper.db")
+            results.append(await _run_one(s, base, out_dir, llm_mode, llm_cache, api_key, say))
     return results
 
 
-def write_report(results: list[ScenarioResult], reports_dir: Path, llm_mode: str) -> Path:
+async def _run_one(
+    s: Scenario,
+    base: Config,
+    out_dir: Path,
+    llm_mode: LLMMode,
+    llm_cache: Path | None,
+    api_key: str | None,
+    say: Callable[[str], None],
+) -> ScenarioResult:
+    say(f"{s.id} {s.title}...")
+    r = await run_scenario(
+        s, base, out_dir, llm_mode=llm_mode, llm_cache=llm_cache, api_key=api_key
+    )
+    bad = [c for c in r.checks if not c.ok]
+    say(
+        f"  {'GEÇTİ' if r.ok else 'KALDI'} ({r.seconds} sn, {len(r.clips)} klip)"
+        + (f" hata: {r.error}" if r.error else "")
+        + "".join(f"\n    - {c.name}: {c.detail}" for c in bad)
+    )
+    return r
+
+
+def write_report(
+    results: list[ScenarioResult],
+    reports_dir: Path,
+    llm_mode: str,
+    metrics: Path | None = None,
+) -> Path:
+    from clipper.evals.monitor import summarize
     from clipper.evals.report import write
 
     rows = [
@@ -437,6 +472,7 @@ def write_report(results: list[ScenarioResult], reports_dir: Path, llm_mode: str
         "passed": sum(r.ok for r in results),
         "total": len(results),
         "usd": round(sum(r.usd for r in results), 4),
+        **({f"kaynak_{k}": v for k, v in summarize(metrics).items()} if metrics else {}),
     }
     return write(reports_dir, "synthetic", summary, rows)
 

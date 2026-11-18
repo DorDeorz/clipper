@@ -46,7 +46,8 @@
 - [ ] **Etiketleme modu (panel):** `clipper label <session_id>` paneli etiketleme ekranında açar. Video oynatıcı + zaman çizelgesi. Kullanıcı "iyi an" işaretler: başlangıç/bitiş, tür (`komik / şok / hikâye / atışma / oyun anı / diğer`), kalite (1 = idare eder, 2 = iyi, 3 = kesin klip). Çıktı `eval/labels/<session>.json`. Sistemin aday çıktıları bu ekranda **gizli** olmalı (etiketleyen etkilenmesin).
 - [x] **Eval rapor üretici:** her `clipper eval ...` koşusu `eval/reports/<tarih>_<tür>.html` + `.json` üretir. Metrik tabloları, başarısız test listesi, sinyal grafikleri, örnek klip linkleri, maliyet.
   > Not: `clipper.evals.report` temel sürüm: özet + senaryo/kontrol tablosu + başarısız liste (JSON + HTML). Sinyal grafikleri ve maliyet sütunu henüz yok.
-- [ ] **Kaynak izleyici:** eval sırasında her 10 sn: RSS bellek, CPU %, GPU VRAM (varsa `nvidia-smi --query-gpu`), disk kullanımı, açık dosya sayısı, kuyruk uzunlukları → `metrics.csv`.
+- [x] **Kaynak izleyici:** eval sırasında her 10 sn: RSS bellek, CPU %, GPU VRAM (varsa `nvidia-smi --query-gpu`), disk kullanımı, açık dosya sayısı, kuyruk uzunlukları → `metrics.csv`.
+  > Not: `clipper.evals.monitor.ResourceMonitor` (sadece standart kütüphane, psutil yok). `clipper eval synthetic` koşusunda `<out>/metrics.csv`; zirve değerler rapor özetine `kaynak_*` olarak yazılır. CPU % = bu süreç + biten alt süreçler (ffmpeg dahil).
 
 ---
 
