@@ -468,14 +468,18 @@ Reddet/onay kararları ve reddetme nedenleri saklanır. Faz 8'de eşik kalibrasy
 ## 5. Aşamalar (Claude Code bu sırayla uygular)
 
 ### Faz 0 — İskelet
-- [ ] `uv` projesi, `pyproject.toml`, `src/` layout, `clipper` CLI (`argparse`, harici CLI kütüphanesi yok)
-- [ ] `config.py` (pydantic + YAML + `.env` okuma, kendi küçük `.env` parser'ımız)
-- [ ] `db.py`: bağlantı (WAL, `foreign_keys=ON`), sürüm numaralı migration sistemi (`schema_version` tablosu), Bölüm 3.4 şeması
-- [ ] `jobs.py`: `enqueue(type, payload, pool, priority, run_after)`. `claim(pool)` → `UPDATE … WHERE id = (SELECT … LIMIT 1) RETURNING *` atomik alma + `locked_until`. Başarı/başarısızlık, üstel backoff, `dead` durumu, crash recovery.
-- [ ] `log.py`: JSON satır log (dosya, günlük rotasyon) + bellekte son 500 satır
-- [ ] `util/crypto.py` (Fernet), `util/timeutil.py`, `util/fs.py` (atomik yazma, disk doluluk kontrolü)
-- [ ] `ffmpeg` / `ffprobe` keşfi ve sürüm/encoder kontrolü: `clipper doctor` komutu (ffmpeg, libass, nvenc, CUDA, model, API key, disk alanı → yeşil/kırmızı rapor)
-- [ ] pytest altyapısı + `tests/fixtures/make_fixtures.py` (ffmpeg `testsrc2` + `sine` ile 3 dk 1920x1080 test videosu, sentetik chat jsonl: düz trafik + 3 belirgin spike)
+- [x] `uv` projesi, `pyproject.toml`, `src/` layout, `clipper` CLI (`argparse`, harici CLI kütüphanesi yok)
+  - Not: Faz 0'da `doctor`, `db migrate|version` ve `keygen` (CLIPPER_SECRET_KEY üretir) komutları var; diğerleri ilgili fazda eklenecek.
+- [x] `config.py` (pydantic + YAML + `.env` okuma, kendi küçük `.env` parser'ımız)
+- [x] `db.py`: bağlantı (WAL, `foreign_keys=ON`), sürüm numaralı migration sistemi (`schema_version` tablosu), Bölüm 3.4 şeması
+- [x] `jobs.py`: `enqueue(type, payload, pool, priority, run_after)`. `claim(pool)` → `UPDATE … WHERE id = (SELECT … LIMIT 1) RETURNING *` atomik alma + `locked_until`. Başarı/başarısızlık, üstel backoff, `dead` durumu, crash recovery.
+  - Not: kurtarılan işler `run_after` değerini korur (sıradaki yerini kaybetmez); kilit süresi dolmuş ama denemesi bitmiş iş `dead` olur. Uzun işler için `heartbeat()` kilidi uzatır.
+- [x] `log.py`: JSON satır log (dosya, günlük rotasyon) + bellekte son 500 satır
+- [x] `util/crypto.py` (Fernet), `util/timeutil.py`, `util/fs.py` (atomik yazma, disk doluluk kontrolü)
+- [x] `ffmpeg` / `ffprobe` keşfi ve sürüm/encoder kontrolü: `clipper doctor` komutu (ffmpeg, libass, nvenc, CUDA, model, API key, disk alanı → yeşil/kırmızı rapor)
+  - Not: keşif kodu `src/clipper/ffmpeg_probe.py`, rapor `src/clipper/doctor.py` (3.3'teki yapıya eklendi). Üç seviye: yeşil / sarı uyarı / kırmızı; sadece kırmızı varsa çıkış kodu 1. NVENC derlemede olsa bile küçük bir deneme encode'u ile gerçekten çalıştığı kontrol ediliyor. `--online` bayrağı Faz 6'da.
+- [x] pytest altyapısı + `tests/fixtures/make_fixtures.py` (ffmpeg `testsrc2` + `sine` ile 3 dk 1920x1080 test videosu, sentetik chat jsonl: düz trafik + 3 belirgin spike)
+  - Not: ek olarak GitHub Actions CI (Ubuntu + Windows: ruff, pytest, doctor) eklendi.
 
 **Bitti sayılması için:** `uv run clipper doctor` çalışıyor. `uv run pytest` yeşil. İş kuyruğu testleri (eşzamanlı claim'de çift alma yok, crash recovery) geçiyor.
 
