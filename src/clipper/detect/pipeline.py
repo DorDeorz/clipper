@@ -12,6 +12,13 @@ from typing import Any
 
 from clipper import chatlog, jobs
 from clipper.config import Config, DetectorConfig, ViewerClipsConfig
+from clipper.content.transcript import (
+    TRANSCRIPT_FILE,
+    covered_seconds,
+    read_lines,
+    speech_rate,
+    voice_keywords,
+)
 from clipper.detect.audio import segments_db
 from clipper.detect.detector import Detection, Detector, Observation
 from clipper.detect.events import EventFilter, LiveEvent, events_near, read_events
@@ -103,11 +110,12 @@ async def analyze_session(
     dcfg = detector_config(cfg.detector, sess["detector_overrides"])
     dcfg = dcfg.model_copy(update={"viewer_clip_bonus": cfg.viewer_clips.bonus})
     extra = json.loads(sess["keywords"]) if sess["keywords"] else {}
-    bins = bin_messages(
-        messages,
-        KeywordScorer(extra={k: float(v) for k, v in extra.items()}),
-        cfg.events.thanks_words,
-    )
+    scorer = KeywordScorer(extra={k: float(v) for k, v in extra.items()})
+    bins = bin_messages(messages, scorer, cfg.events.thanks_words)
+    lines = read_lines(session_dir / TRANSCRIPT_FILE)
+    span = covered_seconds(lines)
+    words_per_sec = speech_rate(lines)
+    voice_kw = voice_keywords(lines, KeywordScorer())
     events = read_events(conn, session_id)
     filt = EventFilter(cfg.events, events)
     viewer_clips = (
@@ -139,6 +147,8 @@ async def analyze_session(
                 audio_db=audio.get(t),
                 threshold_mult=st.threshold_mult,
                 suppressed=st.suppressed,
+                speech=(words_per_sec.get(t, 0.0) if span and span[0] <= t <= span[1] else None),
+                vkw=voice_kw.get(t, 0.0),
             )
         )
     detections += det.flush()

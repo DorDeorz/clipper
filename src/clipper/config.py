@@ -113,6 +113,9 @@ class DetectorWeights(_Strict):
     uniq: float = 0.25
     emote: float = 0.20
     audio: float = 0.15
+    # r3: from the transcript (0 effect while no transcript exists for that time)
+    speech: float = 0.10
+    vkw: float = 0.10
 
 
 class DetectorConfig(_Strict):
@@ -130,7 +133,9 @@ class DetectorConfig(_Strict):
     weights: DetectorWeights = Field(default_factory=DetectorWeights)
     # z-score denominators never go below these (window sums; audio in dB).
     floors: DetectorWeights = Field(
-        default_factory=lambda: DetectorWeights(rate=1.0, uniq=1.0, emote=1.0, audio=3.0)
+        default_factory=lambda: DetectorWeights(
+            rate=1.0, uniq=1.0, emote=1.0, audio=3.0, speech=2.0, vkw=1.0
+        )
     )
     peak_window: int = 10  # seconds after a trigger to search for the peak
     viewer_clip_bonus: float = 1.5
