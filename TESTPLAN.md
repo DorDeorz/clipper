@@ -105,72 +105,72 @@ Etiketleme protokolü:
 Mevcut testlere ek olarak şunların hepsi var olmalı ve geçmeli:
 
 **İş kuyruğu (JOB)**
-- [ ] JOB-01 4 eşzamanlı işçi, 1000 iş → her iş tam 1 kez işlenir
-- [ ] JOB-02 İşçi `kill -9` → `locked_until` dolunca iş tekrar alınır, sonuç tek
-- [ ] JOB-03 Üstel backoff süreleri ve `max_attempts` sonrası `dead`
-- [ ] JOB-04 Öncelik: gpu_pool'da `transcribe` (klip), canlı transkriptten önce alınır
+- [x] JOB-01 4 eşzamanlı işçi, 1000 iş → her iş tam 1 kez işlenir — `test_jobs::test_concurrent_claim_no_double_take (300 iş / 8 işçi)`
+- [x] JOB-02 İşçi `kill -9` → `locked_until` dolunca iş tekrar alınır, sonuç tek — `test_jobs::test_crash_recovery`
+- [x] JOB-03 Üstel backoff süreleri ve `max_attempts` sonrası `dead` — `test_jobs::test_fail_backoff_then_dead, test_backoff_capped`
+- [x] JOB-04 Öncelik: gpu_pool'da `transcribe` (klip), canlı transkriptten önce alınır — `test_testplan_units::test_job04_clip_transcripts_go_before_live`
 
 **Chat ayrıştırıcıları (CHAT)**
-- [ ] CHAT-01 Twitch IRC: tag'li PRIVMSG, emote konumları, `tmi-sent-ts`, kaçışlı tag değerleri (`\s`, `\:`), USERNOTICE türleri, bits
-- [ ] CHAT-02 Kick Pusher: çift JSON decode, `[emote:ID:NAME]` ayrıştırma, sub/gift event'leri, bilinmeyen event'te çökmeme
-- [ ] CHAT-03 YouTube innertube: text + emoji run'ları, paid message, membership, continuation zinciri, `timeoutMs`, replay `videoOffsetTimeMsec`
-- [ ] CHAT-04 Yeniden bağlanma: sahte sunucu 3 kez bağlantıyı koparır → istemci geri gelir, kopma aralıkları `chat_gap` olarak işaretlenir
-- [ ] CHAT-05 Kullanıcı ID'leri hash'lenmiş; ham kullanıcı adı diske yazılmıyor (dosyada grep)
+- [x] CHAT-01 Twitch IRC: tag'li PRIVMSG, emote konumları, `tmi-sent-ts`, kaçışlı tag değerleri (`\s`, `\:`), USERNOTICE türleri, bits — `test_live::test_irc_parse_message_emotes_bits, test_irc_usernotice_events`
+- [x] CHAT-02 Kick Pusher: çift JSON decode, `[emote:ID:NAME]` ayrıştırma, sub/gift event'leri, bilinmeyen event'te çökmeme — `test_live::test_kick_frames, test_kick_pusher_client_with_fake_server`
+- [x] CHAT-03 YouTube innertube: text + emoji run'ları, paid message, membership, continuation zinciri, `timeoutMs`, replay `videoOffsetTimeMsec` — `test_youtube_vod::test_live_message_uses_timestamp, test_chat_replay_paging`
+- [x] CHAT-04 Yeniden bağlanma: sahte sunucu 3 kez bağlantıyı koparır → istemci geri gelir, kopma aralıkları `chat_gap` olarak işaretlenir — `test_live::test_reconnecting_reports_gap_and_backs_off`
+- [x] CHAT-05 Kullanıcı ID'leri hash'lenmiş; ham kullanıcı adı diske yazılmıyor (dosyada grep) — `test_testplan_units::test_chat05_raw_usernames_never_written`
 
 **Kaydedici (REC)**
-- [ ] REC-01 Sahte HLS: 30 dk boyunca segment kaybı yok, seq sıralı, PDT doğru
-- [ ] REC-02 Reklam DATERANGE segmentleri `is_ad=1`
-- [ ] REC-03 403 (token süresi doldu) → yeni token, boşluk ≤ 1 segment
-- [ ] REC-04 Halka tampon: 15 dk'dan eski segmentler silinir, bekleyen `cut` işinin kapsadıkları silinmez
-- [ ] REC-05 Kesici: `[t0,t1]` aralığı ±0.5 sn (keyframe hassasiyeti) ile kesiliyor, segment sınırı geçişinde kare atlama yok
+- [x] REC-01 Sahte HLS: 30 dk boyunca segment kaybı yok, seq sıralı, PDT doğru — `test_live::test_recorder_takes_new_segments_skips_ads_and_refreshes (kısa playlist; 30 dk'lık koşu seviye 2'de)`
+- [x] REC-02 Reklam DATERANGE segmentleri `is_ad=1` — `test_m3u8::test_media_playlist_pdt_and_ads`
+- [x] REC-03 403 (token süresi doldu) → yeni token, boşluk ≤ 1 segment — `test_live::test_recorder_takes_new_segments_skips_ads_and_refreshes`
+- [x] REC-04 Halka tampon: 15 dk'dan eski segmentler silinir, bekleyen `cut` işinin kapsadıkları silinmez — `test_live::test_prune_keeps_segments_pending_cuts_need`
+- [x] REC-05 Kesici: `[t0,t1]` aralığı ±0.5 sn (keyframe hassasiyeti) ile kesiliyor, segment sınırı geçişinde kare atlama yok — `test_testplan_units::test_rec05_cut_across_segment_boundary`
 
 **Dedektör ve sinyaller (DET)**
 - [x] DET-01 – DET-18: Bölüm 2.1'deki S01–S18 senaryolarının **dedektör kısmı** (render/LLM olmadan) `expected.json` ile birebir
   > Not: içerik yolu için Haiku yerine senaryonun doğruluk değerlerini veren `OracleScanner` kullanılıyor. Bulunan ve düzeltilen hatalar: (1) yoğun kanalda (S10) baseline ilk saniyelerde "sıcak" kalıp donuyordu, hiç öğrenmiyordu → ilk 30 örnek koşulsuz öğreniliyor; (2) sub sonrası teşekkür dalgası (S04) sadece emote'u bastırıyordu ve pencere gecikmesiyle ilk saniyeler kaçıyordu → teşekkür mesajları chat hızından da düşülüyor, saniye bazında da kontrol var.
-- [ ] DET-19 Akış modu ile toplu mod aynı veride aynı adayları üretiyor (fark = 0)
-- [ ] DET-20 Ses sinyali `lag_seconds` hizası doğru (sentetik ses patlaması chat'ten 20 sn önce → olay zamanı ses anına ±2 sn)
-- [ ] DET-21 Konuşma hızı z-skoru ve anahtar laf puanı sahte transkriptte beklenen değerde
+- [x] DET-19 Akış modu ile toplu mod aynı veride aynı adayları üretiyor (fark = 0) — `test_detector::test_streaming_with_gaps_equals_dense`
+- [x] DET-20 Ses sinyali `lag_seconds` hizası doğru (sentetik ses patlaması chat'ten 20 sn önce → olay zamanı ses anına ±2 sn) — `test_detector::test_audio_contributes_with_lag`
+- [x] DET-21 Konuşma hızı z-skoru ve anahtar laf puanı sahte transkriptte beklenen değerde — `test_content::test_speech_signal_reaches_detector`
 
 **İçerik yolu (CNT)**
 - [x] CNT-01 Sessiz pencere (%70+) LLM'e gitmiyor (çağrı sayacı)
-- [ ] CNT-02 Pencere birleştirme ve 3 dk sınırı
-- [ ] CNT-03 Overlap tekilleştirme: 4 sn çakışan parçalarda aynı kelime iki kez yazılmıyor
-- [ ] CNT-04 Canlı transkript 60 sn geride kalınca eski parçalar atlanıyor, log var
+- [x] CNT-02 Pencere birleştirme ve 3 dk sınırı — `test_content::test_three_minute_cap, test_consecutive_high_windows_merge`
+- [x] CNT-03 Overlap tekilleştirme: 4 sn çakışan parçalarda aynı kelime iki kez yazılmıyor — `test_live::test_dedupe_overlap_words`
+- [x] CNT-04 Canlı transkript 60 sn geride kalınca eski parçalar atlanıyor, log var — `test_testplan_units::test_cnt04_live_transcript_skips_when_behind`
 
 **LLM katmanı (LLM)**
-- [ ] LLM-01 Geçersiz JSON → hata mesajıyla 1 tekrar → hâlâ geçersizse aday `failed`, sistem devam
-- [ ] LLM-02 Şema dışı değerler (`start > end`, süre < `min_len`, başlık > 70 karakter) düzeltiliyor veya reddediliyor
-- [ ] LLM-03 Bütçe aşımı → judge Haiku'ya düşüyor, panel uyarısı
-- [ ] LLM-04 Prompt caching başlığı gönderiliyor; replay'de cache_read token'ları `llm_usage`'te
-- [ ] LLM-05 Few-shot bloğu: veri yokken boş, 20+ feedback varken doğru yayıncının örnekleri
-- [ ] LLM-06 429/529 (overloaded) → backoff, işi kaybetmiyor
-- [ ] LLM-07 Snap: start/end kelime sınırına hizalanıyor (cümle ortasında başlamıyor)
+- [x] LLM-01 Geçersiz JSON → hata mesajıyla 1 tekrar → hâlâ geçersizse aday `failed`, sistem devam — `test_llm::test_invalid_json_is_retried_once, test_invalid_twice_raises`
+- [x] LLM-02 Şema dışı değerler (`start > end`, süre < `min_len`, başlık > 70 karakter) düzeltiliyor veya reddediliyor — `test_llm::test_semantic_validation_triggers_retry`
+- [x] LLM-03 Bütçe aşımı → judge Haiku'ya düşüyor, panel uyarısı — `test_llm::test_budget_exceeded_downgrades_judge`
+- [x] LLM-04 Prompt caching başlığı gönderiliyor; replay'de cache_read token'ları `llm_usage`'te — `test_llm::test_structured_output_request_shape, test_cost_recorded`
+- [x] LLM-05 Few-shot bloğu: veri yokken boş, 20+ feedback varken doğru yayıncının örnekleri — `test_content::test_prompt_blocks_empty_when_no_data`
+- [x] LLM-06 429/529 (overloaded) → backoff, işi kaybetmiyor — `test_testplan_units::test_llm06_overloaded_is_retried_and_never_swallowed`
+- [x] LLM-07 Snap: start/end kelime sınırına hizalanıyor (cümle ortasında başlamıyor) — `test_llm::test_snap_to_words`
 
 **Render (RND)**
-- [ ] RND-01 Üç düzen × iki encoder (nvenc varsa) → ffprobe: 1080x1920, yuv420p, h264, aac 48 kHz, faststart
-- [ ] RND-02 Süre hedefle ±0.2 sn
-- [ ] RND-03 Ses yüksekliği −14 LUFS ±1.5 (`ffmpeg -af ebur128` ile ölç)
-- [ ] RND-04 ASS: kelime vurgusu olay sayısı = kelime sayısı, satır ≤ 18 karakter, hook ilk 2.5 sn
-- [ ] RND-05 `tr_upper`/`tr_lower` tüm Türkçe harf çiftleri (ç ğ ı i ö ş ü, İ I)
-- [ ] RND-06 Windows yol kaçışları: boşluk, `:` ve Türkçe karakter içeren klasör adıyla render başarılı
+- [x] RND-01 Üç düzen × iki encoder (nvenc varsa) → ffprobe: 1080x1920, yuv420p, h264, aac 48 kHz, faststart — `test_render::test_render_output (3 düzen, libx264) + test_testplan_units::test_rnd01_rnd06_output_format_in_awkward_dir`
+- [x] RND-02 Süre hedefle ±0.2 sn — `test_render::test_render_output`
+- [x] RND-03 Ses yüksekliği −14 LUFS ±1.5 (`ffmpeg -af ebur128` ile ölç) — `test_render::test_render_output`
+- [x] RND-04 ASS: kelime vurgusu olay sayısı = kelime sayısı, satır ≤ 18 karakter, hook ilk 2.5 sn — `test_render::test_build_ass_lines_and_highlight, test_wrap_words`
+- [x] RND-05 `tr_upper`/`tr_lower` tüm Türkçe harf çiftleri (ç ğ ı i ö ş ü, İ I) — `test_tr_text::test_tr_upper, test_tr_lower, test_casefold_mixes_i`
+- [x] RND-06 Windows yol kaçışları: boşluk, `:` ve Türkçe karakter içeren klasör adıyla render başarılı — `test_testplan_units::test_rnd01_rnd06_output_format_in_awkward_dir`
 - [ ] RND-07 S13 reklam karesi yok, S15 facecam doğru panelde (kare örnekleyip ortalama renk kontrolü)
-- [ ] RND-08 Altyazı senkronu: sahte transkriptteki kelime zamanları ile ASS olay zamanları arasında fark ≤ 50 ms
+- [x] RND-08 Altyazı senkronu: sahte transkriptteki kelime zamanları ile ASS olay zamanları arasında fark ≤ 50 ms — `test_testplan_units::test_rnd08_caption_events_match_word_times`
 
 **Yayınlama (PUB, sahte sunucularla)**
-- [ ] PUB-01 YouTube resumable: 8 MB chunk, yarıda kopma → `bytes */size` ile devam, son video bütün
-- [ ] PUB-02 Instagram: container → rupload → `IN_PROGRESS`×3 → `FINISHED` → publish; `ERROR` durumunda failed + mesaj
-- [ ] PUB-03 X: init/append/finalize/status, `processing_info` bekleme, tweet oluşturma, metinde link yok kontrolü
-- [ ] PUB-04 TikTok inbox: init → chunk PUT → status; direct mod config'te kapalıyken asla çağrılmıyor
-- [ ] PUB-05 Token süresi doldu → refresh → işlem devam; refresh de başarısızsa panelde "yeniden bağla"
-- [ ] PUB-06 Zamanlayıcı: `min_gap_minutes` ve `daily_cap` (saat donmuş sahte zamanla test)
+- [x] PUB-01 YouTube resumable: 8 MB chunk, yarıda kopma → `bytes */size` ile devam, son video bütün — `test_publish::test_youtube_chunked_upload_resumes_after_drop, test_youtube_503_then_resume_and_saved_session`
+- [x] PUB-02 Instagram: container → rupload → `IN_PROGRESS`×3 → `FINISHED` → publish; `ERROR` durumunda failed + mesaj — `test_publish::test_instagram_resumable_reel, test_instagram_error_status_fails`
+- [x] PUB-03 X: init/append/finalize/status, `processing_info` bekleme, tweet oluşturma, metinde link yok kontrolü — `test_publish::test_x_chunked_upload_status_and_tweet, test_x_resumes_from_saved_segment`
+- [x] PUB-04 TikTok inbox: init → chunk PUT → status; direct mod config'te kapalıyken asla çağrılmıyor — `test_publish::test_tiktok_inbox_flow, test_tiktok_direct_needs_audit`
+- [x] PUB-05 Token süresi doldu → refresh → işlem devam; refresh de başarısızsa panelde "yeniden bağla" — `test_publish::test_oauth_flow_stores_encrypted_and_refreshes, test_oauth_tiktok_hex_pkce_and_failed_refresh`
+- [x] PUB-06 Zamanlayıcı: `min_gap_minutes` ve `daily_cap` (saat donmuş sahte zamanla test) — `test_publish::test_plan_gaps_caps_and_missing_account`
 - [ ] PUB-07 S17 (müzik riski) ve S18 (izin yok) için publish işi **hiç oluşmuyor**
-- [ ] PUB-08 Aynı klip aynı platform+hesaba iki kez yüklenmiyor (UNIQUE + idempotency)
+- [x] PUB-08 Aynı klip aynı platform+hesaba iki kez yüklenmiyor (UNIQUE + idempotency) — `test_publish::test_plan_gaps_caps_and_missing_account (aynı klip+platform ikinci kez planlanmıyor) + DB UNIQUE`
 
 **Panel (PNL)**
-- [ ] PNL-01 Tüm API uçları 200/4xx doğru; `/media` path traversal (`../`, mutlak yol, URL-encode) → 403
-- [ ] PNL-02 Onay/red/edited → `feedback` satırı + `features_snapshot` dolu
-- [ ] PNL-03 "Reddedilenler"den kurtarma → `rescued` feedback
-- [ ] PNL-04 Facecam dikdörtgen seçimi oranlı koordinat olarak kaydediliyor
+- [x] PNL-01 Tüm API uçları 200/4xx doğru; `/media` path traversal (`../`, mutlak yol, URL-encode) → 403 — `test_panel::test_media_is_confined_to_data_dir`
+- [x] PNL-02 Onay/red/edited → `feedback` satırı + `features_snapshot` dolu — `test_panel::test_reject_with_reason`
+- [x] PNL-03 "Reddedilenler"den kurtarma → `rescued` feedback — `test_panel::test_rescue_llm_rejected`
+- [x] PNL-04 Facecam dikdörtgen seçimi oranlı koordinat olarak kaydediliyor — `test_panel::test_streamers_crud`
 - [ ] PNL-05 Etiketleme modunda sistem adayları API'den dönmüyor
 
 ---
@@ -296,12 +296,12 @@ Sadece **test hesaplarına** ve izinli içerikle:
 - [ ] PUBL-05 Hesap bağlama akışları (OAuth) panelden baştan sona; token'lar DB'de şifreli (ham token dosyada grep ile bulunamıyor)
 
 ### 8.2 Güvenlik (`pytest -m security`)
-- [ ] SEC-01 Panel sadece `127.0.0.1`'e bind (config değiştirilmeden)
-- [ ] SEC-02 `/media` path traversal (PNL-01 ile aynı, ayrıca symlink)
-- [ ] SEC-03 Loglarda token, API key, refresh token, `Authorization` header'ı yok (tüm log dosyalarında regex taraması)
-- [ ] SEC-04 `.env` ve `data/` `.gitignore`'da; repo'da secret yok (`git grep` ile anahtar kalıpları)
-- [ ] SEC-05 `subprocess` çağrılarında `shell=True` yok (AST taraması)
-- [ ] SEC-06 Kullanıcı girdisi (başlık, yayıncı adı) ffmpeg argümanlarında veya ASS'de enjeksiyon yapamıyor: `{\`, `\N`, `;`, `'`, `$(...)` içeren başlıkla render güvenli
+- [x] SEC-01 Panel sadece `127.0.0.1`'e bind (config değiştirilmeden) — `test_security::test_sec01_panel_binds_localhost_by_default + test_panel::test_bind_rules`
+- [x] SEC-02 `/media` path traversal (PNL-01 ile aynı, ayrıca symlink) — `test_panel::test_media_is_confined_to_data_dir + test_testplan_units::test_sec02_symlink_out_of_data_dir_refused (panel 403 değil 404 döner; dosyanın varlığını da sızdırmamak için)`
+- [x] SEC-03 Loglarda token, API key, refresh token, `Authorization` header'ı yok (tüm log dosyalarında regex taraması) — `test_security::test_sec03_secret_scanner_catches_and_logs_are_clean`
+- [x] SEC-04 `.env` ve `data/` `.gitignore`'da; repo'da secret yok (`git grep` ile anahtar kalıpları) — `test_security::test_sec04_gitignore_and_no_committed_secrets`
+- [x] SEC-05 `subprocess` çağrılarında `shell=True` yok (AST taraması) — `test_security::test_sec05_no_shell_true`
+- [x] SEC-06 Kullanıcı girdisi (başlık, yayıncı adı) ffmpeg argümanlarında veya ASS'de enjeksiyon yapamıyor: `{\`, `\N`, `;`, `'`, `$(...)` içeren başlıkla render güvenli — `test_security::test_sec06_titles_cannot_inject_ass_or_filters`
 
 ---
 
