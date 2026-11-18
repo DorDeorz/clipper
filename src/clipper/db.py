@@ -148,8 +148,15 @@ CREATE TABLE clip_stats (
 );
 """
 
+# Faz 7: resumable publishing state and a numeric schedule time for the queue.
+SCHEMA_V3 = """
+ALTER TABLE publications ADD COLUMN state TEXT;
+ALTER TABLE publications ADD COLUMN run_at REAL;
+ALTER TABLE publications ADD COLUMN created_at REAL;
+"""
+
 # Append new migrations to the end; never edit an applied one.
-MIGRATIONS: Sequence[str] = (SCHEMA_V1, SCHEMA_V2)
+MIGRATIONS: Sequence[str] = (SCHEMA_V1, SCHEMA_V2, SCHEMA_V3)
 
 
 def connect(

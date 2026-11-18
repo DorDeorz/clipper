@@ -1,6 +1,6 @@
 """`clipper run`: panel + continuous job workers in one asyncio process (ROADMAP 3.1).
 
-Live watching (LiveWatcher, recorder, chat clients) joins this supervisor in Faz 6.
+Also runs the LiveWatcher (Faz 6) and the publishing jobs (Faz 7, "pub" pool).
 """
 
 from __future__ import annotations
@@ -127,6 +127,9 @@ async def run(
 ) -> int:
     import uvicorn
 
+    from clipper.publish.runner import Publishing
+    from clipper.publish.scheduler import maybe_auto_publish
+    from clipper.publish.wiring import build as build_publish
     from clipper.stages import Stages
     from clipper.transcribe.whisper import Transcriber
     from clipper.worker import run_forever
@@ -135,13 +138,30 @@ async def run(
     server_cls = _quiet_server_cls()
     conn = db.open_db(cfg.db_path, check_same_thread=False)
     llm = make_llm(conn, cfg, secrets)
-    pools: tuple[Any, ...] = ("cpu", "gpu", "io") if llm is not None else ("cpu", "gpu")
+    pools: tuple[Any, ...] = (
+        ("cpu", "gpu", "pub", "io") if llm is not None else ("cpu", "gpu", "pub")
+    )
     if llm is None:
         print("Uyarı: ANTHROPIC_API_KEY yok; LLM işleri beklemede kalacak.", file=sys.stderr)
+    client = httpx.AsyncClient(timeout=httpx.Timeout(60, connect=20), follow_redirects=True)
+    kit = build_publish(conn, cfg, secrets, client)
+    publishing = Publishing(conn, cfg, kit.publishers)
     transcriber = Transcriber(cfg.transcribe, cfg.model_dir)
-    stages = Stages(conn, cfg, transcriber=transcriber, llm=llm)
+    stages = Stages(
+        conn,
+        cfg,
+        transcriber=transcriber,
+        llm=llm,
+        on_rendered=lambda clip_id: maybe_auto_publish(conn, cfg, clip_id, kit.accounts),
+        extra=publishing.handle,
+        extra_types=frozenset({"publish", "publish_status"}),
+    )
     deps = PanelDeps(
-        conn, cfg, secrets, facecam_suggester(conn, cfg, llm) if llm is not None else None
+        conn,
+        cfg,
+        secrets,
+        facecam_suggester(conn, cfg, llm) if llm is not None else None,
+        publish=kit,
     )
     app = create_app(deps)
     server = server_cls(
@@ -169,7 +189,6 @@ async def run(
     workers = asyncio.create_task(run_forever(conn, stages.handle, stop, pools=pools))
     live_transcriber = None
     watcher_task: asyncio.Task[None] | None = None
-    client = httpx.AsyncClient(timeout=30, follow_redirects=True)
     if live:
         from clipper.live.sources import make_prober
         from clipper.live.watcher import LiveWatcher

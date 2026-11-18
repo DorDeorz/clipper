@@ -15,8 +15,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
-Pool = Literal["cpu", "gpu", "io"]
-POOLS: tuple[Pool, ...] = ("cpu", "gpu", "io")
+# "pub": uploads (Faz 7). Separate from "io" (LLM) so publishing runs without an API key.
+Pool = Literal["cpu", "gpu", "io", "pub"]
+POOLS: tuple[Pool, ...] = ("cpu", "gpu", "io", "pub")
 
 DEFAULT_LEASE_SECONDS = 600.0
 BACKOFF_BASE_SECONDS = 10.0

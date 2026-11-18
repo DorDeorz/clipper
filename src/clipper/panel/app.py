@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from clipper import __version__, jobs
@@ -27,6 +27,9 @@ from clipper.feedback import REJECT_REASONS
 from clipper.log import get_logger, ring_buffer
 from clipper.panel import api
 from clipper.panel.api import PanelError
+from clipper.publish import scheduler
+from clipper.publish.oauth import PLATFORMS, OAuthError
+from clipper.publish.wiring import PublishKit
 
 log = get_logger("panel")
 STATIC_DIR = Path(__file__).parent / "static"
@@ -61,6 +64,8 @@ class PanelDeps:
     secrets: Secrets
     # Facecam suggestion needs an LLM; None hides the button's backend.
     facecam_suggest: Callable[[int], Awaitable[dict[str, Any]]] | None = None
+    # Publishing (Faz 7): OAuth + publishers. None → approve only records the decision.
+    publish: PublishKit | None = None
 
 
 def _auth_ok(header: str | None, password: str) -> bool:
@@ -94,6 +99,18 @@ async def _body(request: Request) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise PanelError("JSON gövdesi bir nesne olmalı")
     return data
+
+
+def _callback_page(message: str, *, ok: bool = True) -> str:
+    import html
+
+    color = "#2fb67c" if ok else "#e5534b"
+    return (
+        '<!doctype html><html lang="tr"><meta charset="utf-8"><title>clipper</title>'
+        '<body style="background:#111318;color:#e6e8ec;font:16px system-ui;padding:40px">'
+        f'<p style="color:{color}">{html.escape(message)}</p>'
+        '<p><a style="color:#4f8cff" href="/">Panele dön</a></p></body></html>'
+    )
 
 
 def create_app(deps: PanelDeps) -> FastAPI:
@@ -259,8 +276,15 @@ def create_app(deps: PanelDeps) -> FastAPI:
         platforms = body.get("platforms") or []
         if not isinstance(platforms, list) or not all(isinstance(p, str) for p in platforms):
             raise PanelError("platforms bir metin listesi olmalı")
+        platforms = [p for p in platforms if p in PLATFORMS]
+        kit = deps.publish
+        if platforms and not scheduler.permitted(conn, clip_id):
+            raise PanelError("bu yayıncı için izin işaretli değil; yayın platformu seçilemez", 403)
         decision = api.approve(conn, clip_id, platforms)
-        return {"ok": True, "decision": decision}
+        planned = 0
+        if platforms and kit is not None:
+            planned = len(scheduler.plan(conn, cfg, clip_id, platforms, kit.accounts))
+        return {"ok": True, "decision": decision, "planned": planned}
 
     @app.post("/api/clips/{clip_id}/reject")
     async def do_reject(clip_id: int, request: Request) -> dict[str, Any]:
@@ -279,13 +303,66 @@ def create_app(deps: PanelDeps) -> FastAPI:
     async def publications() -> list[dict[str, Any]]:
         return api.list_publications(conn)
 
+    def _kit() -> PublishKit:
+        if deps.publish is None:
+            raise PanelError("yayınlama modülü çalışmıyor", 503)
+        return deps.publish
+
     @app.post("/api/publications/{pub_id}/retry")
     async def retry_publication(pub_id: int) -> dict[str, Any]:
-        raise PanelError("yayınlama henüz yok (Faz 7)", 501)
+        kit = _kit()
+        try:
+            scheduler.retry(conn, cfg, pub_id, kit.accounts)
+        except LookupError as exc:
+            raise PanelError(str(exc), 404) from exc
+        except scheduler.PermissionDenied as exc:
+            raise PanelError(str(exc), 403) from exc
+        except ValueError as exc:
+            raise PanelError(str(exc)) from exc
+        return {"ok": True}
 
     @app.get("/api/accounts")
-    async def accounts() -> list[dict[str, Any]]:
-        return api.list_accounts(conn)
+    async def accounts() -> dict[str, Any]:
+        kit = deps.publish
+        configured = sorted(kit.oauth.providers) if kit is not None else []
+        return {
+            "platforms": [{"platform": p, "configured": p in configured} for p in PLATFORMS],
+            "accounts": api.list_accounts(conn),
+            "secret_key": kit is not None and kit.oauth.box is not None,
+        }
+
+    @app.delete("/api/accounts/{platform}/{account}")
+    async def remove_account(platform: str, account: str) -> dict[str, Any]:
+        if not _kit().oauth.remove(platform, account):
+            raise PanelError("hesap yok", 404)
+        return {"ok": True}
+
+    @app.post("/api/auth/{platform}/start")
+    async def auth_start(platform: str, request: Request) -> dict[str, Any]:
+        if platform not in PLATFORMS:
+            raise PanelError("bilinmeyen platform", 404)
+        body = await _body(request) if await request.body() else {}
+        account = str(body.get("account") or "").strip() or None
+        try:
+            return {"url": _kit().oauth.start(platform, account)}
+        except OAuthError as exc:
+            raise PanelError(str(exc)) from exc
+
+    @app.get("/callback/{platform}", include_in_schema=False)
+    async def auth_callback(
+        platform: str,
+        code: str | None = None,
+        state: str | None = None,
+        error: str | None = None,
+        error_description: str | None = None,
+    ) -> HTMLResponse:
+        try:
+            account = await _kit().oauth.callback(platform, code, state, error_description or error)
+        except (OAuthError, PanelError) as exc:
+            return HTMLResponse(_callback_page(f"Bağlanamadı: {exc}", ok=False), status_code=400)
+        return HTMLResponse(
+            _callback_page(f"{platform} hesabı bağlandı: {account}. Bu sekmeyi kapatabilirsin.")
+        )
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     return app

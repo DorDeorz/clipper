@@ -225,7 +225,7 @@ def test_signals_sessions_costs_logs(client: TestClient) -> None:
     assert costs["month_usd"] == 0 and costs["days"] == []
     assert isinstance(client.get("/api/logs").json(), list)
     assert client.get("/api/publications").json() == []
-    assert client.get("/api/accounts").json() == []
+    assert client.get("/api/accounts").json()["accounts"] == []
 
 
 def test_basic_auth_when_password(world: Any) -> None:
