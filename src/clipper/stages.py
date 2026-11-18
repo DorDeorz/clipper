@@ -1,6 +1,7 @@
 """Job handlers for the clip pipeline after detection:
 
-cut (cpu) -> transcribe (gpu) -> prefilter (io, Haiku) -> judge (io, Sonnet/Opus).
+cut (cpu) -> transcribe (gpu) -> prefilter (io, Haiku) -> judge (io, Sonnet/Opus)
+-> render (cpu, ffmpeg). r3 session jobs: session_transcribe (gpu) -> content_scan (io).
 
 Every handler is idempotent on its candidate: it re-reads state from the DB and skips work
 that is already done, so a retried or recovered job does not duplicate rows.
@@ -26,6 +27,7 @@ from clipper.llm.client import LLMClient, LLMRefused
 from clipper.llm.prompts import (
     PREFILTER_SYSTEM,
     FeedbackExamples,
+    apply_caption_fixes,
     audio_profile,
     candidate_context,
     chat_timeline,
@@ -43,6 +45,9 @@ from clipper.log import get_logger
 from clipper.media import MediaError
 from clipper.models import ChatMessage
 from clipper.recorder.cutter import cut
+from clipper.render.clip import render_clip
+from clipper.render.ffmpeg import RenderError
+from clipper.render.layouts import Rect, effective_layout
 from clipper.sessions import CHAT_FILE
 from clipper.transcribe.whisper import Transcriber
 from clipper.util.timeutil import iso_now
@@ -52,6 +57,7 @@ log = get_logger("stages")
 PREFILTER_PRIORITY = 20
 JUDGE_PRIORITY_BASE = 100
 RECENT_TITLES = 30
+RENDER_PRIORITY_BASE = 50
 FEEDBACK_EXAMPLES = 20
 
 
@@ -151,6 +157,7 @@ class Stages:
             "transcribe": self.handle_transcribe,
             "prefilter": self.handle_prefilter,
             "judge": self.handle_judge,
+            "render": self.handle_render,
         }.get(job.type)
         if handler is None:
             raise StageError(f"bilinmeyen iş tipi: {job.type}", retry=False)
@@ -410,3 +417,64 @@ class Stages:
             ),
         )
         self._set_status(candidate_id, "judged" if keep else "rejected")
+        if keep:
+            jobs.enqueue(
+                self.conn,
+                "render",
+                {"candidate_id": candidate_id},
+                "cpu",
+                RENDER_PRIORITY_BASE + (100 - dec.score),
+            )
+
+    async def handle_render(self, candidate_id: int, payload: dict[str, Any]) -> None:
+        cand = self._candidate(candidate_id)
+        clip = self._clip(candidate_id)
+        if clip is None or not clip["raw_path"] or clip["start_rel"] is None:
+            raise StageError(f"aday #{candidate_id} render için hazır değil", retry=False)
+        streamer = self.conn.execute(
+            "SELECT layout, facecam_rect FROM streamers WHERE id = ?", (cand["streamer_id"],)
+        ).fetchone()
+        data = self._llm_json(clip)
+        judge = data.get("judge", {})
+        fixes = [(f["from"], f["to"]) for f in judge.get("caption_fixes", [])]
+        transcript = apply_caption_fixes(self._transcript(clip), fixes)
+        words = [(w.w, w.s, w.e) for w in words_from_transcript(transcript)]
+        start, end = float(clip["start_rel"]), float(clip["end_rel"])
+        t0 = float(data.get("cut", {}).get("t0", cand["win_start"]))
+        peak = self.conn.execute(
+            "SELECT t FROM signal_seconds WHERE session_id = ? AND t BETWEEN ? AND ?"
+            " AND audio_db IS NOT NULL ORDER BY audio_db DESC LIMIT 1",
+            (cand["session_id"], math.floor(t0 + start), math.ceil(t0 + end)),
+        ).fetchone()
+        try:
+            facecam = Rect.from_json(streamer["facecam_rect"]) if streamer else None
+        except (ValueError, KeyError):
+            facecam = None
+        raw = Path(clip["raw_path"])
+        try:
+            res = await render_clip(
+                self.cfg.render,
+                raw,
+                start,
+                end,
+                words,
+                raw.parent,
+                layout=streamer["layout"] if streamer else "blur",
+                facecam=facecam,
+                hook=judge.get("hook"),
+                thumb_at=(float(peak[0]) - t0) if peak else None,
+                ffmpeg=self.cfg.paths.ffmpeg,
+                fonts_dir=self.cfg.paths.fonts_dir,
+            )
+        except RenderError as exc:
+            raise StageError(str(exc)) from exc
+        data["render"] = {
+            "encoder": res.encoder,
+            "duration": round(res.duration, 3),
+            "layout": effective_layout(streamer["layout"] if streamer else "blur", facecam),
+        }
+        self.conn.execute(
+            "UPDATE clips SET final_path = ?, thumb_path = ?, llm_json = ? WHERE candidate_id = ?",
+            (str(res.final), str(res.thumb), json.dumps(data, ensure_ascii=False), candidate_id),
+        )
+        self._set_status(candidate_id, "rendered")

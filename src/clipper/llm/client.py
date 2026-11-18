@@ -115,7 +115,7 @@ class LLMClient:
         purpose: str,
         model: str,
         system: str,
-        user: str,
+        user: str | list[dict[str, Any]],
         schema: type[T],
         effort: str,
         max_tokens: int = 16000,

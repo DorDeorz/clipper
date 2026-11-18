@@ -41,6 +41,23 @@ class ContentScanDecision(_Out):
         return max(0, min(100, v))
 
 
+class FacecamDecision(_Out):
+    """Facecam location on a stream frame, normalised to 0-1 (x, y = top-left)."""
+
+    found: bool
+    x: float
+    y: float
+    w: float
+    h: float
+    confidence: int
+    reason: str
+
+    @field_validator("x", "y", "w", "h")
+    @classmethod
+    def _unit(cls, v: float) -> float:
+        return max(0.0, min(1.0, v))
+
+
 class CaptionFix(_Out):
     from_: str = Field(alias="from")
     to: str

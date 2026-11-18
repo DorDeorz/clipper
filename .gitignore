@@ -10,3 +10,5 @@ dist/
 build/
 *.egg-info/
 tests/fixtures/out/
+assets/fonts/*.ttf
+assets/fonts/*.otf

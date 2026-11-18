@@ -269,7 +269,7 @@ def test_multi_source_skips_prefilter_and_judge_sees_context(
         stats = asyncio.run(run_until_idle(conn, stages.handle, poll=0.01))
     finally:
         transcriber.close()
-    assert stats.by_type == {"cut": 1, "transcribe": 1, "judge": 1}
+    assert stats.by_type == {"cut": 1, "transcribe": 1, "judge": 1, "render": 1}
     user = fake.requests[0]["messages"][0]["content"]
     assert "Bulan yollar: chat/ses tepkisi, konuşma içeriği" in user
     assert "joke (91/100) - Komik bir laf." in user

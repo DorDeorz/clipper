@@ -686,11 +686,16 @@ Reddet/onay kararları `feedback` tablosuna yazılır (bkz. 4.9). Reddet butonu 
 **Bitti sayılması için:** VOD session'ında adaylar transkriptlenip judge'dan geçiyor. `clips` tablosunda başlık/metinler dolu. Saatlik maliyet `llm_usage`'te görülüyor (hedef Sonnet ile < $0.25/yayın saati).
 
 ### Faz 4 — Render
-- [ ] `tr_text.py` (`tr_upper`, satır kırma), `ass_captions.py`, `layouts.py`, `render/ffmpeg.py` (komut oluşturucu + çalıştırıcı + ilerleme parse)
-- [ ] Encoder otomatik seçimi, thumbnail
-- [ ] `facecam_vision.py` + `clipper facecam <streamer>` (öneri üretir)
-- [ ] `clipper test-render --layout stack|blur|center` fixture'dan örnek çıktı üretir
-- [ ] Testler: ffprobe ile çıktı 1080x1920, süre ±0.2 sn, ses var, -14 LUFS ±1.5. ASS dosyası beklenen satır sayısında. `tr_upper` testleri.
+- [x] `tr_text.py` (`tr_upper`, satır kırma), `ass_captions.py`, `layouts.py`, `render/ffmpeg.py` (komut oluşturucu + çalıştırıcı + ilerleme parse)
+  - Not: üst seviye `render/clip.py` (`render_clip`). `render` işi (cpu) judge'da tutulan klipler için otomatik kuyruğa girer, aday durumu `rendered` olur; `clips.final_path` / `thumb_path` yazılır. Render klip klasöründe (cwd) çalışır, `clip.ass` ve `fonts/` göreli verilir (Windows yol kaçışı sorunu yok). `stack` için facecam yoksa `blur`'a düşer. Oyun paneli ve `center` kırpması dar kaynakta taşmasın diye `min(iw, ...)` ile korunuyor.
+  - Not: font repoya konmadı (binary); `assets/fonts/README.md` indirme adımlarını anlatıyor, `paths.fonts_dir`, `doctor` kontrolü var. Font yoksa libass sistem fontunu kullanır.
+- [x] Encoder otomatik seçimi, thumbnail
+  - Not: `auto` → `doctor`'daki gibi küçük bir deneme encode'u ile h264_nvenc gerçekten çalışıyorsa NVENC, yoksa libx264. Thumbnail klip aralığındaki en yüksek ses enerjili saniyeden.
+- [x] `facecam_vision.py` + `clipper facecam <streamer>` (öneri üretir)
+  - Not: yayıncının son session videosundan 3 kare, her biri için judge modeline (görsel) tek çağrı; bulunan kutuların medyanı öneri olur. Önizleme `data/facecam/<yayıncı>/preview.jpg` (kırmızı kutu). `--apply` öneriyi `streamers.facecam_rect`'e yazar ve düzeni `stack` yapar.
+- [x] `clipper test-render --layout stack|blur|center` fixture'dan örnek çıktı üretir
+  - Not: ffmpeg `testsrc2` + sahte facecam kutusu + ton ile örnek video üretir, çıktılar `data/test-render/<düzen>/final.mp4`.
+- [x] Testler: ffprobe ile çıktı 1080x1920, süre ±0.2 sn, ses var, -14 LUFS ±1.5. ASS dosyası beklenen satır sayısında. `tr_upper` testleri.
 
 **Bitti sayılması için:** Gerçek VOD'dan 5 klip üç düzende render edilip telefonda izlendiğinde altyazı senkronu ve kadraj düzgün.
 
