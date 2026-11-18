@@ -3,14 +3,22 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from clipper import __version__, db
-from clipper.config import ConfigError, load_config, load_secrets
+import httpx
+
+from clipper import __version__, chatlog, db, ingest
+from clipper.config import Config, ConfigError, load_config, load_secrets
 from clipper.log import get_logger, setup_logging
+from clipper.media import MediaError
+from clipper.platforms.twitch.gql import TwitchGQLError
+from clipper.platforms.youtube.innertube import YouTubeParseError
+from clipper.platforms.youtube.vod import YtDlpError
 from clipper.util.crypto import generate_key
+from clipper.util.timeutil import fmt_duration, parse_iso
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -35,7 +43,78 @@ def build_parser() -> argparse.ArgumentParser:
     db_sub.add_parser("version", help="şema sürümünü göster")
 
     sub.add_parser("keygen", help="yeni CLIPPER_SECRET_KEY üret")
+
+    p_vod = sub.add_parser("vod", help="VOD / yerel dosyadan session oluştur")
+    src = p_vod.add_mutually_exclusive_group(required=True)
+    src.add_argument("--video", type=Path, help="yerel video dosyası")
+    src.add_argument("--twitch-vod", metavar="ID", help="Twitch VOD id'si (anonim indirir)")
+    src.add_argument("--youtube", metavar="VIDEO_ID", help="YouTube video id'si (yt-dlp + chat)")
+    p_vod.add_argument(
+        "--chat", type=Path, help="chat dosyası (.jsonl / .jsonl.gz / TwitchDownloader .json)"
+    )
+    p_vod.add_argument("--streamer", help="yayıncı adı (--video ile zorunlu)")
+    p_vod.add_argument("--platform", choices=["twitch", "kick", "youtube"], default="twitch")
+    p_vod.add_argument("--channel", help="kanal adı/slug (varsayılan: --streamer)")
+    p_vod.add_argument(
+        "--video-start",
+        metavar="ZAMAN",
+        help="videonun başladığı an (unix sn veya ISO-8601); mutlak zamanlı chat'i hizalamak için",
+    )
+    p_vod.add_argument("--title", help="session başlığı")
+
+    p_chat = sub.add_parser("chat-import", help="chat dosyasını ortak jsonl biçimine çevir")
+    p_chat.add_argument("input", type=Path, help="TwitchDownloader .json veya .jsonl")
+    p_chat.add_argument("output", type=Path, help="çıktı .jsonl veya .jsonl.gz")
     return parser
+
+
+def _parse_time(value: str) -> float:
+    try:
+        return float(value)
+    except ValueError:
+        return parse_iso(value)
+
+
+def _say(msg: str) -> None:
+    print(msg, file=sys.stderr, flush=True)
+
+
+async def _run_vod(args: argparse.Namespace, cfg: Config) -> int:
+    conn = db.open_db(cfg.db_path)
+    try:
+        if args.video is not None:
+            if not args.streamer:
+                print("Hata: --video ile --streamer gerekli.", file=sys.stderr)
+                return 2
+            result = await ingest.ingest_local(
+                conn,
+                cfg.paths.data_dir,
+                args.video,
+                args.chat,
+                args.streamer,
+                platform=args.platform,
+                channel=args.channel,
+                video_start=_parse_time(args.video_start) if args.video_start else None,
+                title=args.title,
+                ffprobe=cfg.paths.ffprobe,
+            )
+        else:
+            async with httpx.AsyncClient(http2=False) as client:
+                if args.twitch_vod:
+                    result = await ingest.ingest_twitch_vod(
+                        conn, cfg, client, args.twitch_vod, say=_say
+                    )
+                else:
+                    result = await ingest.ingest_youtube_vod(
+                        conn, cfg, client, args.youtube, say=_say
+                    )
+    finally:
+        conn.close()
+    print(
+        f"Session #{result.session_id} hazır: {fmt_duration(result.duration)} video,"
+        f" {result.chat_count} chat mesajı ({result.session_dir})"
+    )
+    return 0
 
 
 def _ensure_utf8_output() -> None:
@@ -92,6 +171,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         finally:
             conn.close()
         return 0
+
+    if args.command == "chat-import":
+        try:
+            n = chatlog.write_jsonl(args.output, chatlog.load_any(args.input))
+        except (chatlog.ChatFormatError, OSError) as exc:
+            print(f"Hata: {exc}", file=sys.stderr)
+            return 1
+        print(f"{n} mesaj yazıldı: {args.output}")
+        return 0
+
+    if args.command == "vod":
+        try:
+            return asyncio.run(_run_vod(args, cfg))
+        except (
+            ingest.IngestError,
+            chatlog.ChatFormatError,
+            MediaError,
+            TwitchGQLError,
+            YouTubeParseError,
+            YtDlpError,
+            httpx.HTTPError,
+        ) as exc:
+            log.error("vod failed", extra={"error": str(exc)})
+            print(f"Hata: {exc}", file=sys.stderr)
+            return 1
 
     parser.error(f"bilinmeyen komut: {args.command}")
     return 2
