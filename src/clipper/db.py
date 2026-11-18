@@ -152,7 +152,9 @@ CREATE TABLE clip_stats (
 MIGRATIONS: Sequence[str] = (SCHEMA_V1, SCHEMA_V2)
 
 
-def connect(path: Path | str, *, timeout: float = 30.0) -> sqlite3.Connection:
+def connect(
+    path: Path | str, *, timeout: float = 30.0, check_same_thread: bool = True
+) -> sqlite3.Connection:
     """Open a connection with WAL journaling, foreign keys and Row factory.
 
     Connections run in autocommit mode (`isolation_level=None`); use explicit
@@ -160,7 +162,9 @@ def connect(path: Path | str, *, timeout: float = 30.0) -> sqlite3.Connection:
     """
     if isinstance(path, Path):
         path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path), timeout=timeout, isolation_level=None)
+    conn = sqlite3.connect(
+        str(path), timeout=timeout, isolation_level=None, check_same_thread=check_same_thread
+    )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
@@ -195,8 +199,8 @@ def migrate(conn: sqlite3.Connection, migrations: Sequence[str] = MIGRATIONS) ->
     return current
 
 
-def open_db(path: Path | str) -> sqlite3.Connection:
-    conn = connect(path)
+def open_db(path: Path | str, *, check_same_thread: bool = True) -> sqlite3.Connection:
+    conn = connect(path, check_same_thread=check_same_thread)
     migrate(conn)
     return conn
 

@@ -40,6 +40,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("doctor", help="ortam kontrolü (ffmpeg, GPU, anahtarlar, disk)")
 
+    p_run = sub.add_parser("run", help="paneli ve sürekli çalışan iş kuyruğunu başlat")
+    p_run.add_argument("--no-browser", action="store_true", help="tarayıcıyı otomatik açma")
+
     p_db = sub.add_parser("db", help="veritabanı işlemleri")
     db_sub = p_db.add_subparsers(dest="db_command", metavar="İŞLEM")
     db_sub.add_parser("migrate", help="bekleyen migration'ları uygula")
@@ -316,6 +319,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         from clipper.doctor import doctor
 
         return doctor(cfg, secrets)
+
+    if args.command == "run":
+        from clipper.panel.app import PanelConfigError
+        from clipper.runner import run
+
+        try:
+            return asyncio.run(run(cfg, secrets, open_browser=not args.no_browser))
+        except PanelConfigError as exc:
+            print(f"Hata: {exc}", file=sys.stderr)
+            return 2
+        except KeyboardInterrupt:
+            return 130
 
     if args.command == "db":
         conn = db.connect(cfg.db_path)
