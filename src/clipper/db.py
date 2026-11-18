@@ -108,8 +108,48 @@ CREATE TABLE llm_usage (
 );
 """
 
+# r3: multi-signal detection (candidate sources, platform events, content scans),
+# feedback logging and published clip stats.
+SCHEMA_V2 = """
+ALTER TABLE candidates ADD COLUMN sources TEXT NOT NULL DEFAULT '["reactive"]';
+ALTER TABLE candidates ADD COLUMN content_score REAL;
+ALTER TABLE candidates ADD COLUMN content_reason TEXT;
+
+CREATE TABLE live_events (
+  id INTEGER PRIMARY KEY,
+  session_id INTEGER NOT NULL REFERENCES sessions(id),
+  ts REAL NOT NULL, kind TEXT NOT NULL,
+  amount REAL, data TEXT
+);
+CREATE INDEX live_events_ts ON live_events(session_id, ts);
+
+CREATE TABLE content_scans (
+  id INTEGER PRIMARY KEY,
+  session_id INTEGER NOT NULL REFERENCES sessions(id),
+  win_start REAL NOT NULL, win_end REAL NOT NULL,
+  score INTEGER, kind TEXT, reason TEXT, created_at REAL NOT NULL
+);
+
+CREATE TABLE feedback (
+  id INTEGER PRIMARY KEY,
+  clip_id INTEGER NOT NULL REFERENCES clips(id),
+  decision TEXT NOT NULL,
+  reason TEXT,
+  start_delta REAL, end_delta REAL,
+  title_edited INTEGER NOT NULL DEFAULT 0,
+  features_snapshot TEXT NOT NULL,
+  created_at REAL NOT NULL
+);
+
+CREATE TABLE clip_stats (
+  publication_id INTEGER NOT NULL REFERENCES publications(id),
+  fetched_at REAL NOT NULL, views INTEGER, likes INTEGER, comments INTEGER,
+  PRIMARY KEY (publication_id, fetched_at)
+);
+"""
+
 # Append new migrations to the end; never edit an applied one.
-MIGRATIONS: Sequence[str] = (SCHEMA_V1,)
+MIGRATIONS: Sequence[str] = (SCHEMA_V1, SCHEMA_V2)
 
 
 def connect(path: Path | str, *, timeout: float = 30.0) -> sqlite3.Connection:

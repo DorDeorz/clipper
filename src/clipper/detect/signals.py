@@ -4,6 +4,7 @@ users, and emote/keyword score including the repeated-text bonus."""
 from __future__ import annotations
 
 import math
+import re
 from collections import defaultdict, deque
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
@@ -28,6 +29,7 @@ class SecondBin:
     uniq: int = 0
     emote: float = 0.0  # combined emote + keyword + repeat-spam score
     kw: int = 0  # clip-request messages (informational)
+    thanks: int = 0  # r3: "welcome / thanks for the sub" style messages
     users: set[str] = field(default_factory=set)
 
 
@@ -38,8 +40,12 @@ class ChatBinner:
     `USER_MAX_IN_WINDOW` messages per user per `USER_WINDOW` seconds are counted.
     """
 
-    def __init__(self, scorer: KeywordScorer | None = None) -> None:
+    def __init__(
+        self, scorer: KeywordScorer | None = None, thanks_words: Iterable[str] = ()
+    ) -> None:
         self.scorer = scorer or KeywordScorer()
+        words = [re.escape(tr_casefold(w)) for w in thanks_words if w.strip()]
+        self._thanks = re.compile(r"(?<!\w)(?:" + "|".join(words) + r")(?!\w)") if words else None
         self._bins: dict[int, SecondBin] = {}
         self._user_recent: dict[str, deque[float]] = defaultdict(deque)
         self._user_last_sec: dict[str, int] = {}
@@ -68,6 +74,8 @@ class ChatBinner:
         b.emote += score + max(msg.weight - 1.0, 0.0)
         if "clip" in matched:
             b.kw += 1
+        if self._thanks is not None and self._thanks.search(tr_casefold(msg.text)):
+            b.thanks += 1
         if self._repeat_spam(msg):
             b.emote += REPEAT_SPAM_BONUS
         return True
@@ -92,9 +100,11 @@ class ChatBinner:
 
 
 def bin_messages(
-    messages: Iterable[ChatMessage], scorer: KeywordScorer | None = None
+    messages: Iterable[ChatMessage],
+    scorer: KeywordScorer | None = None,
+    thanks_words: Iterable[str] = (),
 ) -> dict[int, SecondBin]:
-    binner = ChatBinner(scorer)
+    binner = ChatBinner(scorer, thanks_words)
     for m in sorted(messages, key=lambda m: m.ts):
         binner.add(m)
     return {b.t: b for b in binner.pop_all()}

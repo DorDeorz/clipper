@@ -22,6 +22,27 @@ detector:
   post_roll: 25
   weights: { rate: 0.40, uniq: 0.25, emote: 0.20, audio: 0.15 }
 transcribe: { model: large-v3, device: auto, compute_type: auto, language: tr, beam_size: 5 }
+live_transcribe:           # r3: live transcript (content path)
+  enabled: true
+  model: large-v3-turbo    # speed first live; "small" without a GPU
+  chunk_seconds: 20
+  overlap_seconds: 4
+  beam_size: 1
+content_scan:              # r3: content path
+  enabled: true
+  model: claude-haiku-5-5
+  every_seconds: 60
+  window_seconds: 90
+  min_score: 70            # above this the window becomes a candidate
+  skip_if_silent_ratio: 0.7
+events:                    # r3: platform event filter
+  suppress_after_sub_train: 20
+  suppress_threshold_boost: 1.5
+  raid_suppress_seconds: 60
+viewer_clips:
+  enabled: true
+  as_candidate: true
+  bonus: 1.5
 llm:
   prefilter_model: claude-haiku-5-5
   judge_model: claude-sonnet-5-5     # premium: claude-opus-5-5
