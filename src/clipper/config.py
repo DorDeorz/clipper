@@ -279,6 +279,40 @@ class PublishConfig(_Strict):
     status_poll_seconds: float = 30
 
 
+class WorkersConfig(_Strict):
+    """Faz 8: how many jobs of each pool run at once (cpu = cut + render)."""
+
+    cpu: int = Field(default=2, ge=1)
+    gpu: int = Field(default=1, ge=1)
+    io: int = Field(default=4, ge=1)
+    pub: int = Field(default=2, ge=1)
+
+
+class RetentionConfig(_Strict):
+    """Faz 8 disk policy. Segments of live sessions follow `recorder.buffer_minutes`."""
+
+    raw_days: float = 7
+    final_days: float = 30
+    disk_high_percent: float = 85
+    aggressive_raw_days: float = 1
+    aggressive_final_days: float = 7
+    check_every_minutes: float = 30
+
+
+class LearnConfig(_Strict):
+    """Faz 8 learned score model (ROADMAP 4.9 Kademe 2)."""
+
+    min_decisions: int = 200
+    min_streamer_decisions: int = 100
+    l2: float = 1.0
+    # Per-streamer weights are pulled toward the global ones with this strength.
+    shrinkage: float = 5.0
+    test_fraction: float = 0.2
+    # Pre-LLM gate (only after the user applies a model in the panel).
+    gate_skip_below: float = 0.05
+    gate_bypass_above: float = 0.95
+
+
 class StreamerConfig(_Strict):
     display_name: str
     platform: Literal["twitch", "kick", "youtube"]
@@ -334,6 +368,9 @@ class Config(_Strict):
     llm: LLMConfig = Field(default_factory=LLMConfig)
     render: RenderConfig = Field(default_factory=RenderConfig)
     publish: PublishConfig = Field(default_factory=PublishConfig)
+    workers: WorkersConfig = Field(default_factory=WorkersConfig)
+    retention: RetentionConfig = Field(default_factory=RetentionConfig)
+    learn: LearnConfig = Field(default_factory=LearnConfig)
     streamers: list[StreamerConfig] = Field(default_factory=list)
 
     @property

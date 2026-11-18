@@ -160,7 +160,45 @@ def create_app(deps: PanelDeps) -> FastAPI:
             "layouts": ["stack", "blur", "center"],
             "facecam_suggest": deps.facecam_suggest is not None,
             "review_count": len(api.list_clips(conn, data_dir, "review")),
+            "disk": _disk(),
         }
+
+    def _disk() -> dict[str, Any] | None:
+        from clipper.retention import disk_usage
+
+        try:
+            used, total = disk_usage(data_dir)
+        except OSError:
+            return None
+        pct = round(100.0 * used / total, 1) if total else 0.0
+        return {"percent": pct, "high": pct >= cfg.retention.disk_high_percent}
+
+    # ---- learned model (4.9 Kademe 2) --------------------------------------------------
+
+    @app.get("/api/learn")
+    async def learn_status() -> dict[str, Any]:
+        from clipper.learn.service import summaries
+
+        return summaries(conn, cfg)
+
+    @app.post("/api/learn/{version}/apply")
+    async def learn_apply(version: int) -> dict[str, Any]:
+        from clipper.learn.service import LearnError, apply
+
+        try:
+            apply(conn, cfg, version)
+        except LearnError as exc:
+            raise PanelError(str(exc), 404) from exc
+        return {"ok": True}
+
+    @app.post("/api/learn/undo")
+    async def learn_undo() -> dict[str, Any]:
+        from clipper.learn.service import undo
+
+        version = undo(conn)
+        if version is None:
+            raise PanelError("uygulanmış bir öneri yok")
+        return {"ok": True, "version": version}
 
     @app.get("/api/logs")
     async def logs(limit: int = 500) -> list[dict[str, Any]]:

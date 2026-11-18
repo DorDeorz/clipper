@@ -16,7 +16,7 @@ from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
 from typing import Any
 
-from clipper import chatlog, jobs
+from clipper import chatlog, jobs, settings
 from clipper.config import Config
 from clipper.content.batch import (
     CONTENT_SCAN_PRIORITY,
@@ -24,6 +24,7 @@ from clipper.content.batch import (
     transcribe_session,
 )
 from clipper.content.scanner import ContentScanner
+from clipper.learn.service import gate_model, gate_probability
 from clipper.llm.client import LLMClient, LLMRefused
 from clipper.llm.prompts import (
     PREFILTER_SYSTEM,
@@ -276,8 +277,10 @@ class Stages:
         cand = self._candidate(candidate_id)
         clip = self._clip(candidate_id)
         assert clip is not None
-        transcript = self._transcript(clip)
         features = json.loads(cand["features"])
+        if self._learned_gate(candidate_id, cand, clip, features):
+            return
+        transcript = self._transcript(clip)
         user = prefilter_user(
             cand["streamer"],
             cand["category"],
@@ -314,6 +317,52 @@ class Stages:
             "io",
             JUDGE_PRIORITY_BASE + (100 - dec.rough_score),
         )
+
+    def _learned_gate(
+        self,
+        candidate_id: int,
+        cand: sqlite3.Row,
+        clip: sqlite3.Row,
+        features: dict[str, Any],
+    ) -> bool:
+        """4.9 Kademe 2, only after the user applied a learned model: very unlikely
+        candidates never reach the LLM, very likely ones skip the prefilter. Returns True
+        when the candidate was handled here."""
+        model = gate_model(self.conn, self.cfg, int(cand["streamer_id"]))
+        if model is None:
+            return False
+        snap = {
+            "features": features,
+            "det_score": cand["det_score"],
+            "sources": json.loads(cand["sources"]) if cand["sources"] else ["reactive"],
+            "content_score": cand["content_score"],
+            "window": [cand["win_start"], cand["win_end"]],
+        }
+        p = gate_probability(model, snap)
+        lc = self.cfg.learn
+        if p < lc.gate_skip_below:
+            self._reject(
+                candidate_id,
+                clip,
+                "prefilter",
+                f"öğrenilmiş model: kabul olasılığı düşük ({p:.2f})",
+            )
+            return True
+        if p > lc.gate_bypass_above:
+            data = self._llm_json(clip)
+            data["prefilter"] = {
+                "keep": True,
+                "rough_score": round(p * 100),
+                "reason": f"öğrenilmiş model ön elemeyi atladı ({p:.2f})",
+                "model": "learned",
+            }
+            self._save_llm_json(candidate_id, data)
+            self._set_status(candidate_id, "prefiltered")
+            jobs.enqueue(
+                self.conn, "judge", {"candidate_id": candidate_id}, "io", JUDGE_PRIORITY_BASE
+            )
+            return True
+        return False
 
     def _reject(self, candidate_id: int, clip: sqlite3.Row, stage: str, reason: str) -> None:
         data = self._llm_json(clip)
@@ -425,7 +474,8 @@ class Stages:
             "usd": round(res.usd, 6),
             "snapped": {"start": start, "end": end},
         }
-        keep = dec.keep and dec.score >= self.cfg.llm.min_keep_score
+        min_keep = settings.number(self.conn, settings.MIN_KEEP_SCORE, self.cfg.llm.min_keep_score)
+        keep = dec.keep and dec.score >= min_keep
         self.conn.execute(
             "UPDATE clips SET llm_json = ?, llm_score = ?, start_rel = ?, end_rel = ?, title = ?"
             " WHERE candidate_id = ?",
