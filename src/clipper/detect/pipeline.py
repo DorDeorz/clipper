@@ -136,13 +136,19 @@ async def analyze_session(
         b = bins.get(t)
         st = filt.state(t)
         emote = b.emote if b else 0.0
-        if t in thanks:
+        msgs, uniq = (b.msgs, b.uniq) if b else (0, 0)
+        if t in thanks and b is not None:
+            # Welcome / thank-you waves after subs are not reactions: their messages do not
+            # count towards the chat rate either.
             emote *= cfg.events.thanks_emote_factor
+            if b.msgs:
+                keep = max(b.msgs - b.thanks, 0) / b.msgs
+                msgs, uniq = b.msgs - b.thanks, round(b.uniq * keep)
         detections += det.feed(
             Observation(
                 t=t,
-                msgs=b.msgs if b else 0,
-                uniq=b.uniq if b else 0,
+                msgs=msgs,
+                uniq=uniq,
                 emote=emote,
                 audio_db=audio.get(t),
                 threshold_mult=st.threshold_mult,
@@ -284,7 +290,8 @@ def _thanks_dampening(
         if old is not None:
             msgs -= old.msgs
             thanks -= old.thanks
-        if msgs >= 3 and thanks >= ratio * msgs:
+        here = (b.msgs, b.thanks) if b else (0, 0)
+        if (msgs >= 3 and thanks >= ratio * msgs) or (here[0] >= 3 and here[1] >= ratio * here[0]):
             out.add(t)
     return out
 

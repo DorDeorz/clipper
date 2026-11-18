@@ -40,7 +40,8 @@
   - `fake_kick.py`: kanal API (Cloudflare 403 simülasyonu dahil), Pusher WS (çift JSON-encoded event)
   - `fake_youtube.py`: `/live` sayfası, `live_chat` HTML + `get_live_chat` continuation zinciri, replay
   - `fake_publishers.py`: YouTube resumable upload, IG container/rupload/publish, X media upload v2 + tweets, TikTok inbox init/PUT/status. Hepsinde 429, 5xx, token süresi dolması ve yarıda kopma modları.
-- [ ] **Senaryo üretici** `tests/fixtures/scenarios.py`: Bölüm 2.1'deki her senaryo için video + chat + olaylar + (gerekiyorsa) sahte transkript + **beklenen sonuç dosyası** (`expected.json`) üretir.
+- [x] **Senaryo üretici** `tests/fixtures/scenarios.py`: Bölüm 2.1'deki her senaryo için video + chat + olaylar + (gerekiyorsa) sahte transkript + **beklenen sonuç dosyası** (`expected.json`) üretir.
+  > Not: `clipper.evals.scenarios` (testler `tests/fixtures/scenarios.py` üzerinden kullanır). Dedektör testleri için sadece ses segmentleri (8 kHz WAV), tam pipeline için `video=True` ile 1080p mpegts segmentleri. Sapmalar: S02'de ses olay anında, chat tepkisi `lag_seconds` (20 sn) sonra zirve yapıyor (DET-20 ile tutarlı olsun diye; plandaki "2 sn önce" varsayılan lag ile çelişiyordu). S17/S18 6 dk (3 dk'lık `warmup_seconds` yüzünden). S12 VOD modunda kopma bilgisi olmadığından sadece "mesaj yok" olarak modellendi.
 - [ ] **Etiketleme modu (panel):** `clipper label <session_id>` paneli etiketleme ekranında açar. Video oynatıcı + zaman çizelgesi. Kullanıcı "iyi an" işaretler: başlangıç/bitiş, tür (`komik / şok / hikâye / atışma / oyun anı / diğer`), kalite (1 = idare eder, 2 = iyi, 3 = kesin klip). Çıktı `eval/labels/<session>.json`. Sistemin aday çıktıları bu ekranda **gizli** olmalı (etiketleyen etkilenmesin).
 - [ ] **Eval rapor üretici:** her `clipper eval ...` koşusu `eval/reports/<tarih>_<tür>.html` + `.json` üretir. Metrik tabloları, başarısız test listesi, sinyal grafikleri, örnek klip linkleri, maliyet.
 - [ ] **Kaynak izleyici:** eval sırasında her 10 sn: RSS bellek, CPU %, GPU VRAM (varsa `nvidia-smi --query-gpu`), disk kullanımı, açık dosya sayısı, kuyruk uzunlukları → `metrics.csv`.
@@ -124,13 +125,14 @@ Mevcut testlere ek olarak şunların hepsi var olmalı ve geçmeli:
 - [ ] REC-05 Kesici: `[t0,t1]` aralığı ±0.5 sn (keyframe hassasiyeti) ile kesiliyor, segment sınırı geçişinde kare atlama yok
 
 **Dedektör ve sinyaller (DET)**
-- [ ] DET-01 – DET-18: Bölüm 2.1'deki S01–S18 senaryolarının **dedektör kısmı** (render/LLM olmadan) `expected.json` ile birebir
+- [x] DET-01 – DET-18: Bölüm 2.1'deki S01–S18 senaryolarının **dedektör kısmı** (render/LLM olmadan) `expected.json` ile birebir
+  > Not: içerik yolu için Haiku yerine senaryonun doğruluk değerlerini veren `OracleScanner` kullanılıyor. Bulunan ve düzeltilen hatalar: (1) yoğun kanalda (S10) baseline ilk saniyelerde "sıcak" kalıp donuyordu, hiç öğrenmiyordu → ilk 30 örnek koşulsuz öğreniliyor; (2) sub sonrası teşekkür dalgası (S04) sadece emote'u bastırıyordu ve pencere gecikmesiyle ilk saniyeler kaçıyordu → teşekkür mesajları chat hızından da düşülüyor, saniye bazında da kontrol var.
 - [ ] DET-19 Akış modu ile toplu mod aynı veride aynı adayları üretiyor (fark = 0)
 - [ ] DET-20 Ses sinyali `lag_seconds` hizası doğru (sentetik ses patlaması chat'ten 20 sn önce → olay zamanı ses anına ±2 sn)
 - [ ] DET-21 Konuşma hızı z-skoru ve anahtar laf puanı sahte transkriptte beklenen değerde
 
 **İçerik yolu (CNT)**
-- [ ] CNT-01 Sessiz pencere (%70+) LLM'e gitmiyor (çağrı sayacı)
+- [x] CNT-01 Sessiz pencere (%70+) LLM'e gitmiyor (çağrı sayacı)
 - [ ] CNT-02 Pencere birleştirme ve 3 dk sınırı
 - [ ] CNT-03 Overlap tekilleştirme: 4 sn çakışan parçalarda aynı kelime iki kez yazılmıyor
 - [ ] CNT-04 Canlı transkript 60 sn geride kalınca eski parçalar atlanıyor, log var
