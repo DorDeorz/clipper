@@ -11,11 +11,13 @@ from pathlib import Path
 from typing import Any
 
 from clipper import chatlog, jobs
-from clipper.config import Config, DetectorConfig
+from clipper.config import Config, DetectorConfig, ViewerClipsConfig
 from clipper.detect.audio import segments_db
 from clipper.detect.detector import Detection, Detector, Observation
+from clipper.detect.events import EventFilter, LiveEvent, events_near, read_events
 from clipper.detect.keywords_tr import KeywordScorer
-from clipper.detect.signals import bin_messages
+from clipper.detect.merge import Draft, merge_drafts
+from clipper.detect.signals import SecondBin, bin_messages
 from clipper.log import get_logger
 from clipper.models import ChatMessage
 from clipper.render.tr_text import tr_casefold
@@ -99,8 +101,18 @@ async def analyze_session(
     end = math.ceil(max(s["pdt_start"] + s["duration"] for s in segs))
 
     dcfg = detector_config(cfg.detector, sess["detector_overrides"])
+    dcfg = dcfg.model_copy(update={"viewer_clip_bonus": cfg.viewer_clips.bonus})
     extra = json.loads(sess["keywords"]) if sess["keywords"] else {}
-    bins = bin_messages(messages, KeywordScorer(extra={k: float(v) for k, v in extra.items()}))
+    bins = bin_messages(
+        messages,
+        KeywordScorer(extra={k: float(v) for k, v in extra.items()}),
+        cfg.events.thanks_words,
+    )
+    events = read_events(conn, session_id)
+    filt = EventFilter(cfg.events, events)
+    viewer_clips = (
+        [e for e in events if e.kind == "viewer_clip"] if cfg.viewer_clips.enabled else []
+    )
     audio: dict[int, float] = {}
     if with_audio:
         audio = await segments_db(
@@ -108,19 +120,34 @@ async def analyze_session(
         )
 
     det = Detector(dcfg)
+    for vc in viewer_clips:
+        det.add_viewer_clip(_clip_center(vc))
     detections: list[Detection] = []
+    thanks = _thanks_dampening(bins, start, end, dcfg.burst_window, cfg.events.thanks_ratio)
     for t in range(start, end):
         b = bins.get(t)
+        st = filt.state(t)
+        emote = b.emote if b else 0.0
+        if t in thanks:
+            emote *= cfg.events.thanks_emote_factor
         detections += det.feed(
             Observation(
                 t=t,
                 msgs=b.msgs if b else 0,
                 uniq=b.uniq if b else 0,
-                emote=b.emote if b else 0.0,
+                emote=emote,
                 audio_db=audio.get(t),
+                threshold_mult=st.threshold_mult,
+                suppressed=st.suppressed,
             )
         )
     detections += det.flush()
+
+    drafts = [_reactive_draft(d, filt) for d in detections]
+    if cfg.viewer_clips.as_candidate:
+        drafts += [_viewer_clip_draft(vc, dcfg.threshold, cfg.viewer_clips) for vc in viewer_clips]
+    merged = merge_drafts(drafts, cfg.merge.radius_seconds, cfg.content_scan.max_candidate_seconds)
+    context = _context_features(sess)
 
     conn.execute("BEGIN IMMEDIATE")
     try:
@@ -154,25 +181,16 @@ async def analyze_session(
             ],
         )
         ids: list[int] = []
-        for d in detections:
+        for d in merged:
             d.win_start = max(d.win_start, float(start))
             d.win_end = min(d.win_end, float(end))
-            d.features["top_messages"] = top_messages(messages, d.event_ts - 5, d.peak_ts + 5)
-            cur = conn.execute(
-                "INSERT INTO candidates (session_id, peak_ts, win_start, win_end, det_score,"
-                " features, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'new', ?)",
-                (
-                    session_id,
-                    d.peak_ts,
-                    d.win_start,
-                    d.win_end,
-                    round(d.det_score, 4),
-                    json.dumps(d.features, ensure_ascii=False),
-                    iso_now(),
-                ),
+            msg_from = float(d.features.get("event_ts", d.win_start))
+            d.features["top_messages"] = top_messages(messages, msg_from - 5, d.peak_ts + 5)
+            d.features["events"] = events_near(
+                [e for e in events if e.kind != "viewer_clip"], d.win_start, d.win_end
             )
-            cid = cur.lastrowid
-            assert cid is not None
+            d.features.update(context)
+            cid = insert_candidate(conn, session_id, d)
             ids.append(cid)
             jobs.enqueue(
                 conn,
@@ -190,3 +208,80 @@ async def analyze_session(
         extra={"session_id": session_id, "seconds": end - start, "candidates": len(ids)},
     )
     return DetectResult(session_id, end - start, ids)
+
+
+def insert_candidate(conn: sqlite3.Connection, session_id: int, d: Draft) -> int:
+    cur = conn.execute(
+        "INSERT INTO candidates (session_id, peak_ts, win_start, win_end, det_score, features,"
+        " status, created_at, sources, content_score, content_reason)"
+        " VALUES (?, ?, ?, ?, ?, ?, 'new', ?, ?, ?, ?)",
+        (
+            session_id,
+            d.peak_ts,
+            d.win_start,
+            d.win_end,
+            round(d.det_score, 4),
+            json.dumps(d.features, ensure_ascii=False),
+            iso_now(),
+            json.dumps(d.sources),
+            d.content_score,
+            d.content_reason,
+        ),
+    )
+    cid = cur.lastrowid
+    assert cid is not None
+    return cid
+
+
+def _clip_center(e: LiveEvent) -> float:
+    return e.ts + float(e.data.get("duration") or 0) / 2
+
+
+def _reactive_draft(d: Detection, filt: EventFilter) -> Draft:
+    feats = dict(d.features)
+    feats["event_ts"] = d.event_ts
+    st = filt.state(float(feats.get("trigger_ts", d.peak_ts)))
+    feats["event_filter"] = st.reason
+    if "viewer_clips" in feats:
+        feats["viewer_clips_near"] = feats.pop("viewer_clips")
+    return Draft(d.peak_ts, d.win_start, d.win_end, d.det_score, ["reactive"], feats)
+
+
+def _viewer_clip_draft(e: LiveEvent, threshold: float, vcfg: ViewerClipsConfig) -> Draft:
+    dur = float(e.data.get("duration") or 30)
+    info = {k: e.data[k] for k in ("slug", "title", "views") if k in e.data}
+    return Draft(
+        peak_ts=_clip_center(e),
+        win_start=e.ts - vcfg.pad_seconds,
+        win_end=e.ts + dur + vcfg.pad_seconds,
+        det_score=threshold + vcfg.bonus,
+        sources=["viewer_clip"],
+        features={"viewer_clips": [{"ts": e.ts, "duration": dur, **info}]},
+    )
+
+
+def _thanks_dampening(
+    bins: dict[int, SecondBin], start: int, end: int, window: int, ratio: float
+) -> set[int]:
+    """Seconds whose trailing window is dominated by welcome / thanks-for-the-sub chat."""
+    out: set[int] = set()
+    msgs = thanks = 0
+    for t in range(start, end):
+        b = bins.get(t)
+        msgs += b.msgs if b else 0
+        thanks += b.thanks if b else 0
+        old = bins.get(t - window)
+        if old is not None:
+            msgs -= old.msgs
+            thanks -= old.thanks
+        if msgs >= 3 and thanks >= ratio * msgs:
+            out.add(t)
+    return out
+
+
+def _context_features(sess: sqlite3.Row) -> dict[str, Any]:
+    out: dict[str, Any] = {"category": sess["category"]}
+    started = str(sess["started_at"] or "")
+    if len(started) >= 13 and started[11:13].isdigit():
+        out["hour"] = int(started[11:13])
+    return out

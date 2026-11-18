@@ -22,6 +22,8 @@ class Observation:
     emote: float = 0.0
     audio_db: float | None = None
     chat_ok: bool = True  # False while the chat connection is down
+    threshold_mult: float = 1.0  # r3 event filter: >1 after a sub train
+    suppressed: bool = False  # r3 event filter: reactive trigger closed (raid)
 
 
 @dataclass(slots=True)
@@ -52,11 +54,12 @@ class _Ewma:
         self.var = 0.0
         self.n = 0
 
-    def update(self, x: float) -> None:
+    def update(self, x: float, *, slow: bool = False) -> None:
         self.n += 1
         # Until enough samples exist, behave like a plain running mean/variance;
         # a fixed small alpha from a cold start would stay stuck near the first values.
-        a = max(self.alpha, 1.0 / self.n)
+        # `slow` (raid adaptation) always uses the half-life rate.
+        a = self.alpha if slow else max(self.alpha, 1.0 / self.n)
         d = x - self.mean
         self.mean += a * d
         self.var = (1 - a) * (self.var + a * d * d)
@@ -143,7 +146,7 @@ class Detector:
         self.history.append(ScoreRow(obs.t, score, z, x))
 
         out: list[Detection] = []
-        hot = score >= cfg.threshold
+        hot = score >= cfg.threshold * obs.threshold_mult
         # Peak = highest score; on the clipped plateau, the strongest unclipped reaction.
         peak_key = (round(score, 2), sum(getattr(w, k) * z[k] for k in FEATURES))
         if self._event is not None:
@@ -151,7 +154,7 @@ class Detector:
                 self._event.update(score=score, t=obs.t, z=dict(z), x=dict(x), key=peak_key)
             if obs.t >= self._event["t0"] + cfg.peak_window:
                 out += self._finish_event()
-        elif obs.chat_ok and hot and self._can_trigger(obs.t, x):
+        elif obs.chat_ok and not obs.suppressed and hot and self._can_trigger(obs.t, x):
             self._last_trigger = obs.t
             self._event = {
                 "t0": obs.t,
@@ -162,12 +165,14 @@ class Detector:
                 "key": peak_key,
             }
 
-        # Baseline is frozen during spikes so they don't inflate their own baseline.
-        if obs.chat_ok and not hot and self._event is None:
+        # Baseline is frozen during spikes so they don't inflate their own baseline. During
+        # a raid it keeps adapting so the bigger audience slowly becomes the new normal.
+        if obs.chat_ok and (not hot or obs.suppressed) and self._event is None:
+            slow = hot  # only reachable while suppressed
             for k in ("rate", "uniq", "emote"):
-                self._base[k].update(x[k])
+                self._base[k].update(x[k], slow=slow)
             if audio_x is not None:
-                self._base["audio"].update(audio_x)
+                self._base["audio"].update(audio_x, slow=slow)
 
         if (
             self._pending is not None

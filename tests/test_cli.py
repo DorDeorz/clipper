@@ -25,9 +25,9 @@ def test_db_migrate_and_version(tmp_path: Path, capsys: pytest.CaptureFixture[st
     cfg = _cfg(tmp_path)
     env = tmp_path / ".env"
     assert main(["--config", str(cfg), "--env", str(env), "db", "migrate"]) == 0
-    assert "v0 → v1" in capsys.readouterr().out
+    assert "v0 → v2" in capsys.readouterr().out
     assert main(["--config", str(cfg), "--env", str(env), "db", "version"]) == 0
-    assert "v1" in capsys.readouterr().out
+    assert "v2" in capsys.readouterr().out
     assert (tmp_path / "data" / "clipper.db").is_file()
 
 

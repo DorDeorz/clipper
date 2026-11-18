@@ -7,19 +7,22 @@ import shutil
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
 
 from clipper import chatlog
 from clipper.config import Config
+from clipper.detect.events import write_events
 from clipper.log import get_logger
 from clipper.media import probe
 from clipper.models import ChatMessage, Segment
 from clipper.platforms.kick import api as kick_api
 from clipper.platforms.kick import vod as kick_vod
+from clipper.platforms.twitch import clips as twitch_clips
 from clipper.platforms.twitch import vod as twitch_vod
-from clipper.platforms.twitch.gql import TwitchGQL
+from clipper.platforms.twitch.gql import TwitchGQL, TwitchGQLError
 from clipper.platforms.twitch.vod_chat import iter_vod_comments
 from clipper.platforms.youtube import innertube
 from clipper.platforms.youtube import vod as youtube_vod
@@ -213,7 +216,33 @@ async def ingest_twitch_vod(
         chat_messages=messages,
     )
     chat_path.unlink(missing_ok=True)
+    if meta.category:
+        conn.execute(
+            "UPDATE sessions SET category = ? WHERE id = ?", (meta.category, result.session_id)
+        )
+    if cfg.viewer_clips.enabled:
+        await _store_vod_clips(conn, gql, meta, result.session_id, say)
     return result
+
+
+async def _store_vod_clips(
+    conn: sqlite3.Connection,
+    gql: TwitchGQL,
+    meta: twitch_vod.VodMetadata,
+    session_id: int,
+    say: Callable[[str], None],
+) -> None:
+    """Best effort: viewer clips are a bonus signal, a GQL hiccup must not fail ingest."""
+    created = datetime.fromtimestamp(meta.created_at, UTC) if meta.created_at else None
+    try:
+        clips = await twitch_clips.vod_clips(
+            gql, meta.login, meta.vod_id, vod_created=created, say=say
+        )
+    except (TwitchGQLError, httpx.HTTPError) as exc:
+        log.warning("vod clips failed", extra={"vod_id": meta.vod_id, "error": str(exc)})
+        say(f"İzleyici klipleri alınamadı ({exc}); chat ve ses ile devam ediliyor.")
+        return
+    write_events(conn, session_id, clips)
 
 
 def make_kick_api(cfg: Config, client: httpx.AsyncClient) -> kick_api.KickAPI:

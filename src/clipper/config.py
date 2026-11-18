@@ -137,6 +137,60 @@ class DetectorConfig(_Strict):
     viewer_clip_radius: float = 30
 
 
+class LiveTranscribeConfig(_Strict):
+    """r3: live transcript for the content path (ROADMAP 4.3b)."""
+
+    enabled: bool = True
+    model: str = "large-v3-turbo"
+    chunk_seconds: float = 20
+    overlap_seconds: float = 4
+    beam_size: int = 1
+    max_lag_seconds: float = 60
+
+
+class ContentScanConfig(_Strict):
+    """r3: content path, Haiku scans the transcript every minute (ROADMAP 4.3b)."""
+
+    enabled: bool = True
+    model: str = "claude-haiku-5-5"
+    every_seconds: float = 60
+    window_seconds: float = 90
+    min_score: int = 70
+    skip_if_silent_ratio: float = 0.7
+    pad_seconds: float = 10
+    max_candidate_seconds: float = 180
+    chat_samples: int = 15
+
+
+class EventsConfig(_Strict):
+    """r3: platform event filter (ROADMAP 4.3 item 8b)."""
+
+    sub_train_count: int = 5
+    sub_train_window: float = 5
+    suppress_after_sub_train: float = 20
+    suppress_threshold_boost: float = 1.5
+    raid_suppress_seconds: float = 60
+    thanks_words: list[str] = Field(
+        default_factory=lambda: [
+            "hoş geldin", "hoşgeldin", "welcome", "sub", "abone", "teşekkürler", "thanks",
+            "ty", "gifted", "hediye",
+        ]
+    )  # fmt: skip
+    thanks_ratio: float = 0.5
+    thanks_emote_factor: float = 0.3
+
+
+class ViewerClipsConfig(_Strict):
+    enabled: bool = True
+    as_candidate: bool = True
+    bonus: float = 1.5
+    pad_seconds: float = 10
+
+
+class MergeConfig(_Strict):
+    radius_seconds: float = 20
+
+
 class TranscribeConfig(_Strict):
     model: str = "large-v3"
     device: str = "auto"
@@ -215,6 +269,11 @@ class Config(_Strict):
     recorder: RecorderConfig = Field(default_factory=RecorderConfig)
     detector: DetectorConfig = Field(default_factory=DetectorConfig)
     transcribe: TranscribeConfig = Field(default_factory=TranscribeConfig)
+    live_transcribe: LiveTranscribeConfig = Field(default_factory=LiveTranscribeConfig)
+    content_scan: ContentScanConfig = Field(default_factory=ContentScanConfig)
+    events: EventsConfig = Field(default_factory=EventsConfig)
+    viewer_clips: ViewerClipsConfig = Field(default_factory=ViewerClipsConfig)
+    merge: MergeConfig = Field(default_factory=MergeConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     render: RenderConfig = Field(default_factory=RenderConfig)
     publish: PublishConfig = Field(default_factory=PublishConfig)

@@ -647,9 +647,13 @@ Reddet/onay kararları `feedback` tablosuna yazılır (bkz. 4.9). Reddet butonu 
   - Not: `clipper detect <session>` (yeniden çalıştırma `--force`, sadece henüz işlenmemiş adaylar silinir). `clipper vod` sonunda dedektör + rapor otomatik çalışır (`--no-detect`). Yayıncı bazlı `detector_overrides` ve `keywords` uygulanır. Kesit işi önceliği skora göre.
 - [x] `clipper report <session_id>` → tek HTML dosyası: sinyal grafiği (kendi SVG'miz), aday işaretleri, her adayın en sık chat mesajları
   - Not: varsayılan çıktı `data/sessions/<id>/report.html`; açık/koyu tema.
-- [ ] (r3) Olay filtresi: `live_events` yazımı ve sub yağmuru / raid bastırma (4.3 madde 8b). VOD modunda Twitch VOD chat'teki USERNOTICE karşılıkları da işlenir.
-- [ ] (r3) İzleyici klibi yolu: VOD'da GQL ile o VOD'dan açılmış klipleri çek (`video(id) { clips }` veya kanalın `clips` listesi, `vod offset` ile eşle), aday yap.
-- [ ] (r3) Aday birleştirme (±20 sn, `sources` dizisi), tüm özelliklerin `features`'a yazılması (4.9 Kademe 0)
+- [x] (r3) Olay filtresi: `live_events` yazımı ve sub yağmuru / raid bastırma (4.3 madde 8b). VOD modunda Twitch VOD chat'teki USERNOTICE karşılıkları da işlenir.
+  - Sapma: 2026-11-18 canlı doğrulamada ne Twitch VOD chat'inde (persisted `VideoCommentsByOffsetOrCursor`: sadece `fragments`, `userBadges`, `userColor`) ne Kick chat replay'inde (`type` sadece `message` / `reply`) sub/gift/raid/bits olayı yok. Bu yüzden VOD modunda olay kaynağı yok; filtre (`detect/events.py`, `EventFilter`) ve `live_events` tablosu hazır, olaylar Faz 6'da canlı IRC/Pusher/innertube'dan gelecek. "Hoş geldin / sub için teşekkürler" dalgası bastırması chat metninden çalıştığı için VOD'da da aktif (`events.thanks_words`).
+  - Not: raid sırasında baseline yavaş (yarılanma süresiyle) adapte olur; soğuk başlangıç hızlandırması kullanılmaz.
+- [x] (r3) İzleyici klibi yolu: VOD'da GQL ile o VOD'dan açılmış klipleri çek (`video(id) { clips }` veya kanalın `clips` listesi, `vod offset` ile eşle), aday yap.
+  - Not: `video(id) { clips }` anonim sorguda hep boş dönüyor (2026-11-18). Kanalın `user(login).clips(criteria)` listesi VOD yaşına göre en dar periyotla (`LAST_DAY` … `ALL_TIME`) sayfalanıp `video.id` ile süzülüyor, zaman `videoOffsetSeconds` (`platforms/twitch/clips.py`). Klipler `live_events` (`kind=viewer_clip`) olarak yazılır; çekim hatası ingest'i durdurmaz. Kick ve YouTube'da karşılığı yok.
+- [x] (r3) Aday birleştirme (±20 sn, `sources` dizisi), tüm özelliklerin `features`'a yazılması (4.9 Kademe 0)
+  - Not: `detect/merge.py`; aynı kaynaktan gelen adaylar birbiriyle birleşmez (dedektör zaten birleştiriyor). Tepe noktası öncelik sırası reaktif > içerik > izleyici klibi. `features`: z/x/baseline, `sources`, `events`, `event_filter`, `viewer_clips`, `category`, `hour`, `top_messages`. İzleyici sayısı VOD'da zaman serisi olarak yok (Kick sadece tek bir `viewer_count` veriyor), canlıda eklenecek.
 - [x] Testler: sentetik chat'te 3 spike'ın 3'ü de bulunuyor, düz bölgede yanlış pozitif yok, cooldown ve birleştirme çalışıyor, tek kullanıcı spam'i spike sayılmıyor
 
 **Bitti sayılması için:** Gerçek VOD'da `report` çıktısı makul adaylar gösteriyor. Kullanıcı 5–10 adayı izleyip "mantıklı" diyor.
