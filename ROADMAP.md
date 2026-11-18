@@ -6,6 +6,15 @@
 
 > **Revizyon r2 (2026-11-18): Anonim izleme.** İzleme tarafı (chat, canlı mı, izleyici sayısı, klip sinyali, kayıt, VOD chat) varsayılan olarak **hiçbir hesap/API key olmadan** çalışacak. Twitch: anonim IRC + anonim GQL. YouTube: innertube (web sitesinin iç API'si). Kick: Pusher. Resmi API'ler (Twitch Helix, YouTube Data API) sadece **opsiyonel yedek**. Değişen bölümler: 2, 4.1, 6, Faz 1, Faz 6. Faz 0'ı etkilemez; sadece `config.py`'de `monitoring.mode: anonymous | official` alanı olsun (varsayılan `anonymous`).
 
+> **Revizyon r3 (2026-11-18): Çok sinyalli tespit.** Tek başına chat hızı yetersiz: sakin ama iyi anları (hikâye, laf, atışma) kaçırıyor. Yeni tasarım üç kaynaktan aday üretiyor:
+> 1. **Reaktif yol**: chat + ses + izleyici klipleri (mevcut dedektör, olay filtresiyle).
+> 2. **İçerik yolu (YENİ)**: canlı transkript, Haiku 5.5 ile dakikada bir taranıyor.
+> 3. **İzleyici klibi yolu**: Twitch'te birisi klip açtıysa doğrudan aday.
+>
+> Son karar Sonnet 5.5'te. Onay/red geri bildirimi ilk günden kaydediliyor. Görüntü kareleri, bağlam özeti ve öğrenilmiş ağırlıklar **v2 (Faz 8, opsiyonel)**.
+>
+> Değişen bölümler: 3.2, 3.4 (yeni migration), 3.5, 4.3, yeni 4.3b, 4.5, 7, Faz 2, 3, 5, 6, 8. Faz 0 bitmişse şema değişiklikleri **yeni bir migration** olarak eklenecek, eski migration düzenlenmeyecek.
+
 ---
 
 ## 0. Sistem ne yapacak (tek paragraf)
@@ -82,7 +91,12 @@ Tek komut: `clipper run`. Tek Python süreci, `asyncio` supervisor:
 ### 3.2 Pipeline (bir klibin yolculuğu)
 
 ```
-chat + ses sinyali ─► Detector ─► candidate(peak_ts)
+            ┌─ (1) Reaktif: chat + ses + olay filtresi ─► Detector ──────┐
+canlı akış ─┼─ (2) İçerik: LiveTranscriber ─► ContentScanner (Haiku) ────┼─► candidate (source=reactive|content|viewer_clip)
+            └─ (3) İzleyici klibi: Twitch GQL clips ─────────────────────┘
+   (aynı zaman aralığına düşen adaylar birleştirilir, skorlar ve source'lar birlikte tutulur)
+
+candidate
    ─► job:cut        (segmentlerden [peak-60s, peak+25s] ham kesit → raw.mp4)
    ─► job:transcribe (faster-whisper, tr, word_timestamps → transcript.json)
    ─► job:prefilter  (Haiku 5.5: hızlı keep/drop + kaba skor)
@@ -231,6 +245,46 @@ CREATE TABLE llm_usage (                       -- maliyet takibi
 );
 ```
 
+**r3 migration (yeni migration dosyası olarak):**
+```sql
+ALTER TABLE candidates ADD COLUMN sources TEXT NOT NULL DEFAULT '["reactive"]';  -- JSON: reactive | content | viewer_clip
+ALTER TABLE candidates ADD COLUMN content_score REAL;        -- içerik yolunun (Haiku) skoru
+ALTER TABLE candidates ADD COLUMN content_reason TEXT;
+
+CREATE TABLE live_events (                 -- platform olayları (sub/bits/raid/bağış/superchat/klip)
+  id INTEGER PRIMARY KEY,
+  session_id INTEGER NOT NULL REFERENCES sessions(id),
+  ts REAL NOT NULL, kind TEXT NOT NULL,    -- sub | gift_sub | bits | raid | donation | superchat | viewer_clip
+  amount REAL, data TEXT
+);
+CREATE INDEX live_events_ts ON live_events(session_id, ts);
+
+CREATE TABLE content_scans (               -- içerik yolu tarama kayıtları (maliyet ve kalibrasyon için)
+  id INTEGER PRIMARY KEY,
+  session_id INTEGER NOT NULL REFERENCES sessions(id),
+  win_start REAL NOT NULL, win_end REAL NOT NULL,
+  score INTEGER, kind TEXT, reason TEXT, created_at REAL NOT NULL
+);
+
+CREATE TABLE feedback (                    -- onay/red geri bildirimi: öğrenme döngüsünün verisi
+  id INTEGER PRIMARY KEY,
+  clip_id INTEGER NOT NULL REFERENCES clips(id),
+  decision TEXT NOT NULL,                  -- approved | rejected | edited
+  reason TEXT,                             -- not_funny | no_context | bad_cut | duplicate | music | sensitive | low_quality | other
+  start_delta REAL, end_delta REAL,        -- kullanıcı kırpmayı ne kadar değiştirdi
+  title_edited INTEGER NOT NULL DEFAULT 0,
+  features_snapshot TEXT NOT NULL,         -- karar anındaki TÜM sinyal özellikleri (JSON)
+  created_at REAL NOT NULL
+);
+
+CREATE TABLE clip_stats (                  -- yayınlanan kliplerin performansı (Faz 8)
+  publication_id INTEGER NOT NULL REFERENCES publications(id),
+  fetched_at REAL NOT NULL, views INTEGER, likes INTEGER, comments INTEGER,
+  PRIMARY KEY (publication_id, fetched_at)
+);
+```
+Canlı transkript DB'ye değil `data/sessions/<id>/live_transcript.jsonl` dosyasına yazılır (`{t0, t1, text, words[]}` satırları, wall-clock zamanlı).
+
 Ham chat mesajları DB'ye **yazılmaz**. `data/sessions/<id>/chat.jsonl.gz` dosyasına akar (hacim yüksek). DB'de sadece saniyelik özet tutulur.
 
 ### 3.5 Config (config.yaml) iskeleti
@@ -255,6 +309,27 @@ detector:
   post_roll: 25
   weights: { rate: 0.40, uniq: 0.25, emote: 0.20, audio: 0.15 }
 transcribe: { model: large-v3, device: auto, compute_type: auto, language: tr, beam_size: 5 }
+live_transcribe:           # r3: canlı transkript (içerik yolu için)
+  enabled: true
+  model: large-v3-turbo    # canlıda hız öncelikli; GPU yoksa "small"
+  chunk_seconds: 20
+  overlap_seconds: 4
+  beam_size: 1
+content_scan:              # r3: içerik yolu
+  enabled: true
+  model: claude-haiku-5-5
+  every_seconds: 60
+  window_seconds: 90
+  min_score: 70            # bu skorun üstü aday olur
+  skip_if_silent_ratio: 0.7   # pencerenin %70'i sessizse LLM'e gönderme
+events:                    # r3: platform olay filtresi
+  suppress_after_sub_train: 20   # ≥5 sub/gift olayından sonraki X sn reaktif tetik eşiği yükselir
+  suppress_threshold_boost: 1.5
+  raid_suppress_seconds: 60
+viewer_clips:
+  enabled: true
+  as_candidate: true       # izleyici klibi tek başına aday açar
+  bonus: 1.5
 llm:
   prefilter_model: claude-haiku-5-5
   judge_model: claude-sonnet-5-5     # "premium" mod: claude-opus-5-5
@@ -340,7 +415,12 @@ Hesap (her saniye):
 5. Tetik: `S ≥ threshold` **ve** `rate ≥ min_rate` **ve** `x_rate ≥ min_ratio · μ_rate` **ve** warmup bitti **ve** cooldown dışında.
 6. Tetik sonrası 10 sn içinde `S`'nin maksimumu = `peak_ts`. Olay tahmini: `event_ts = peak_ts − lag_seconds`.
 7. Kesit penceresi: `[event_ts − pre_roll, peak_ts + post_roll]`. Çakışan adaylar birleştirilir.
-8. Twitch'te izleyici klibi geldiyse: o anın ±30 sn'sindeki adayın skoruna +1.5 bonus. Aday yoksa düşük eşikle aday aç.
+8. Twitch'te izleyici klibi geldiyse: o anın ±30 sn'sindeki adayın skoruna +1.5 bonus. Aday yoksa `viewer_clips.as_candidate` açıksa doğrudan aday aç (`source=viewer_clip`). İzleyici klibinin `createdAt`'i olayın ~10–40 sn sonrasıdır; pencereyi buna göre geriye kaydır.
+8b. **Olay filtresi (r3):** Platform olayları `live_events`'e yazılır. Kaynaklar: Twitch IRC `USERNOTICE` (`msg-id`: sub, resub, subgift, submysterygift, raid) ve `PRIVMSG` içindeki `bits` tag'i; Kick Pusher event'leri (`SubscriptionEvent`, `GiftedSubscriptionsEvent`, `StreamHostEvent` — adlar canlı testte doğrulanacak); YouTube innertube `liveChatPaidMessageRenderer` / `liveChatMembershipItemRenderer`. Bu olaylar **aday üretmez**. Sub yağmuru / raid sonrası chat patlaması "an" değil, o yüzden:
+   - 5 sn içinde ≥5 sub/gift olayı → sonraki `suppress_after_sub_train` sn boyunca `threshold × suppress_threshold_boost`.
+   - Raid → `raid_suppress_seconds` boyunca reaktif tetik kapalı (izleyici sayısı baseline'ı da sıfırlanmaz, yeni izleyicilerle yavaşça adapte olur).
+   - "Teşekkürler X abone için" tarzı chat dalgaları: aynı kelimelerin (`hoş geldin`, `welcome`, `sub`) baskın olduğu pencerelerde emote skoru 0.3× çarpanla düşürülür.
+   - Bağıştan sonraki yayıncı tepkisi yine de içerik yolu ile yakalanabilir.
 9. Her adayın `features` JSON'una tüm z'leri, ham değerleri ve en sık 20 chat mesajını yaz (LLM'e gidecek).
 
 `keywords_tr.py` varsayılan ağırlıklar (yayıncı bazında config ile genişletilebilir):
@@ -350,6 +430,25 @@ Hesap (her saniye):
 - Övgü: `efsane, helal, GG, ez, 🔥` → 0.6
 - Yas/fail: `F, RIP, 💀` → 0.8
 - Tekrar spam (aynı metin ≥5 farklı kullanıcıdan 5 sn içinde) → mesaj başı +0.5
+
+### 4.3b İçerik yolu (r3): canlı transkript + Haiku taraması
+
+**LiveTranscriber** (session başına bir async görev, gpu_pool'u kullanır):
+- Recorder yeni segment yazdıkça sesi `chunk_seconds` (20 sn) + `overlap_seconds` (4 sn) parçalar halinde 16 kHz mono PCM'e çevirir, faster-whisper'a verir (`beam_size=1`, `vad_filter=True`, `word_timestamps=True`).
+- Overlap bölgesindeki kelimeler zaman damgasına göre tekilleştirilir. Çıktı wall-clock zamanlı olarak `live_transcript.jsonl`'a eklenir.
+- **Öncelik kuralı:** gpu_pool'da kesin klip transkripti (`transcribe` işi) canlı transkriptten önce gelir. Canlı transkript gerçek zamanın 60 sn'den fazla gerisine düşerse eski parçaları atla ve logla.
+- Kazanç: klip kesildiğinde transkriptin büyük kısmı hazırdır. `transcribe` işi sadece kenarlarda (large-v3 ile) yeniden yazar.
+- Ek ucuz sinyaller transkriptten çıkar ve dedektöre beslenir: **konuşma hızı** (kelime/sn, yayıncının kendi baseline'ına göre z-skor) ve **anahtar laf** puanı (`keywords_tr.py`'deki şok/gülme kelimeleri yayıncının ağzından çıkınca ayrıca puanlanır).
+
+**ContentScanner** (session başına bir async görev):
+- Her `every_seconds` (60 sn) son `window_seconds` (90 sn) transkripti alır. Pencerenin `skip_if_silent_ratio`'dan fazlası sessizse atlar.
+- Haiku 5.5'e gönderir. Girdi: yayıncı adı, kategori, pencere transkripti (saniye ofsetli), aynı penceredeki chat'ten 15 örnek mesaj + mesaj/sn özeti. System prompt cache'li.
+- Çıktı (tool use, zorunlu JSON): `{score: 0-100, kind: "story|joke|rant|argument|reaction|info|none", reason, best_start, best_end}`
+- `score ≥ min_score` → `candidates` (`source=content`). Pencere `[best_start − 10, best_end + 10]`. Önceki pencereyle çakışıyorsa birleştir (hikâyeler 90 sn'den uzun sürebilir: art arda iki yüksek skorlu pencere tek aday olur, max 3 dk).
+- Her tarama `content_scans`'e yazılır.
+- Maliyet: ~60 çağrı/saat × ~1.5k girdi + ~100 çıktı token → Haiku 5.5 ile **~$0.01/yayın saati**.
+
+**Birleştirme:** Reaktif, içerik ve izleyici klibi adayları ±20 sn içinde çakışıyorsa tek aday olur, `sources` dizisinde hepsi tutulur. Birden fazla kaynaktan gelen aday prefilter'da öncelik alır (prefilter'ı atlayıp doğrudan judge'a gidebilir: `sources` uzunluğu ≥2 ise).
 
 ### 4.4 Transkript
 
@@ -371,6 +470,8 @@ Hesap (her saniye):
 - Chat'in zaman çizelgesi (ham kesit ofsetine çevrilmiş, saniye başı mesaj sayısı + örnek mesajlar)
 - Ses enerjisi profili (saniye başı dB, kısaltılmış)
 - Bu yayıncının son 30 yayınlanmış başlığı (tekrarı önlemek için)
+- (r3) Adayın kaynakları (`sources`), içerik yolunun `kind` + `reason`'ı, penceredeki platform olayları (örn. "bu sırada 10 gift sub geldi")
+- (r3) Bu yayıncı için son 20 **reddedilen** klibin red nedeni özeti ve son 20 **onaylanan** klibin başlığı. Böylece model kullanıcının zevkini few-shot olarak görür (öğrenme döngüsünün ucuz, ilk gün çalışan hali; bkz. 4.9).
 
 Çıktı şeması (`llm/schemas.py`):
 ```json
@@ -473,7 +574,32 @@ Sayfalar (tek sayfa, sekmeli):
 
 API: `/api/streamers`, `/api/sessions/{id}/signals`, `/api/clips`, `/api/clips/{id}/approve|reject|rerender`, `/api/publications`, `/api/auth/{platform}/start`, `/callback/{platform}`, `/media/{path}` (data dizininden güvenli dosya servisi, path traversal korumalı). Panel sadece `127.0.0.1`'e bind olur. Uzaktan erişim gerekirse basit parola (`.env`) + bilinçli olarak `0.0.0.0`.
 
-Reddet/onay kararları ve reddetme nedenleri saklanır. Faz 8'de eşik kalibrasyonu bu veriden yapılır.
+Reddet/onay kararları `feedback` tablosuna yazılır (bkz. 4.9). Reddet butonu tek tıkla neden seçtirir: *komik değil · bağlamsız · kötü kesim · tekrar · müzik · hassas · kalitesiz · diğer*. Kullanıcı kırpmayı veya başlığı değiştirip onaylarsa `edited` olarak kaydedilir, farklar saklanır.
+
+### 4.9 Öğrenme döngüsü (r3)
+
+Üç kademe. Veri toplama ilk günden, öğrenme veri biriktikçe:
+
+**Kademe 0 — Veri toplama (Faz 3 + Faz 5, zorunlu):**
+- Her aday oluştuğunda **tüm** özellikler `candidates.features`'a yazılır: reaktif z'ler, ham değerler, konuşma hızı, anahtar laf puanı, içerik skoru/türü, izleyici klibi var mı, olay filtresi aktif miydi, kategori, saat, izleyici sayısı, LLM prefilter/judge skorları.
+- Panelde karar verildiğinde bu özelliklerin kopyası `feedback.features_snapshot`'a donar. Sonradan özellik hesabı değişse bile eğitim verisi tutarlı kalır.
+- Reddedilen adaylar da (LLM'in elediği, hiç render edilmeyenler dahil) `status=rejected` ile saklanır; bunlar negatif örnek.
+
+**Kademe 1 — Few-shot geri bildirim (Faz 3'ten itibaren, otomatik):**
+- Judge prompt'una yayıncı bazında son onay/red örnekleri eklenir (4.5). Eğitim gerektirmez, ilk onaydan itibaren etki eder.
+
+**Kademe 2 — Öğrenilmiş skor modeli (Faz 8, ≥200 karar sonrası):**
+- `clipper learn [--streamer X]`: `feedback` + `candidates`'tan veri seti kur. Hedef: `approved`/`edited` = 1, `rejected` = 0.
+- Model: **numpy ile kendi yazdığımız L2-regularize logistic regression** (ek kütüphane yok, 15–30 özellik için yeterli). Global model + veri yetiyorsa (≥100 karar) yayıncı bazlı model; az veride global modele doğru shrinkage.
+- Kullanım:
+  - Reaktif dedektör ağırlıkları (`weights`) ve `threshold` modelden türetilir. Hangi sinyal bu yayıncıda daha belirleyiciyse ağırlığı artar.
+  - Prefilter öncesi bir "kabul olasılığı" hesaplanır. Olasılığı çok düşük adaylar LLM'e hiç gitmez (maliyet düşer), çok yüksekler prefilter'ı atlar.
+  - `min_keep_score` ve `auto_publish_min_score` önerilir.
+- Değerlendirme: zaman bazlı ayırma (son %20 karar test). Rapor: precision@k, ROC-AUC, önceki ağırlıklara göre fark. Yeni ağırlıklar **otomatik uygulanmaz**; panelde "öneriyi uygula" butonu. Eski ağırlıklar versiyonlu saklanır, geri alınabilir.
+
+**Kademe 3 — Performans sinyali (Faz 8, opsiyonel):**
+- Yayınlanan kliplerin izlenme/beğeni sayıları günde bir çekilir (`clip_stats`; YouTube `videos.list?part=statistics`, Instagram `/{media-id}/insights`, X post metrics).
+- Kullanıcı onayı "iyi mi" sorusunu, izlenme ise "tutuyor mu" sorusunu cevaplar. İkinci bir hedef olarak 7. gün izlenmesinin yayıncı medyanına oranı (log) kullanılır. Modele ek özellik değil, **ayrı bir hedef** olarak eğitilir. Panelde "hangi sinyal izlenme getiriyor" raporu üretilir.
 
 ---
 
@@ -521,6 +647,9 @@ Reddet/onay kararları ve reddetme nedenleri saklanır. Faz 8'de eşik kalibrasy
   - Not: `clipper detect <session>` (yeniden çalıştırma `--force`, sadece henüz işlenmemiş adaylar silinir). `clipper vod` sonunda dedektör + rapor otomatik çalışır (`--no-detect`). Yayıncı bazlı `detector_overrides` ve `keywords` uygulanır. Kesit işi önceliği skora göre.
 - [x] `clipper report <session_id>` → tek HTML dosyası: sinyal grafiği (kendi SVG'miz), aday işaretleri, her adayın en sık chat mesajları
   - Not: varsayılan çıktı `data/sessions/<id>/report.html`; açık/koyu tema.
+- [ ] (r3) Olay filtresi: `live_events` yazımı ve sub yağmuru / raid bastırma (4.3 madde 8b). VOD modunda Twitch VOD chat'teki USERNOTICE karşılıkları da işlenir.
+- [ ] (r3) İzleyici klibi yolu: VOD'da GQL ile o VOD'dan açılmış klipleri çek (`video(id) { clips }` veya kanalın `clips` listesi, `vod offset` ile eşle), aday yap.
+- [ ] (r3) Aday birleştirme (±20 sn, `sources` dizisi), tüm özelliklerin `features`'a yazılması (4.9 Kademe 0)
 - [x] Testler: sentetik chat'te 3 spike'ın 3'ü de bulunuyor, düz bölgede yanlış pozitif yok, cooldown ve birleştirme çalışıyor, tek kullanıcı spam'i spike sayılmıyor
 
 **Bitti sayılması için:** Gerçek VOD'da `report` çıktısı makul adaylar gösteriyor. Kullanıcı 5–10 adayı izleyip "mantıklı" diyor.
@@ -537,6 +666,10 @@ Reddet/onay kararları ve reddetme nedenleri saklanır. Faz 8'de eşik kalibrasy
 - [x] prefilter ve judge işleri, saatlik aday sınırı, kelime sınırına snap
   - Not: işler `clipper work` ile kuyruk boşalana kadar çalışır (`clipper run` Faz 5/6'da). Sonuçlar `clipper clips <session_id> [--all]` ile görülür.
   - Not: saatlik sınır için judge işleri prefilter puanına göre sıralanır (yüksek puan önce), saat dilimi dolunca kalanlar "saatlik aday sınırı doldu" gerekçesiyle reddedilir. Son başlıklar, yayınlama gelene kadar yayıncının daha önce judge'dan geçmiş klip başlıklarından alınıyor.
+- [ ] (r3) **İçerik yolu toplu modu**: VOD'un tam transkripti çıkarılır (faster-whisper large-v3), ContentScanner aynı mantıkla 60 sn adımla tüm VOD'u tarar. Canlıdaki kodla **aynı sınıf**, sadece zaman kaynağı farklı.
+- [ ] (r3) Konuşma hızı ve anahtar laf sinyalleri (4.3b) dedektöre beslenir
+- [ ] (r3) Judge prompt'una few-shot geri bildirim bloğu (4.9 Kademe 1). Veri yoksa blok boş geçilir.
+- [ ] (r3) Testler: sessiz pencere atlanıyor, art arda iki yüksek skorlu pencere birleşiyor, 3 dk sınırı uygulanıyor
 - [x] Testler: LLM istemcisi `httpx.MockTransport` ile (SDK'ya custom http_client verilerek), geçersiz JSON → tekrar deneme, bütçe aşımı → Haiku'ya düşme
   - Not: anthropic SDK 2.x `httpx2` üzerine kurulu, testler `httpx2.MockTransport` + `anthropic.DefaultAsyncHttpxClient(transport=...)` kullanıyor.
   - Bekleyen: "Bitti" maddesi için gerçek bir VOD'da `ANTHROPIC_API_KEY` ile `clipper work` çalıştırılması ve `llm_usage` maliyetinin ölçülmesi.
@@ -556,6 +689,9 @@ Reddet/onay kararları ve reddetme nedenleri saklanır. Faz 8'de eşik kalibrasy
 - [ ] FastAPI uygulaması, statik dosyalar, güvenli `/media`
 - [ ] Bölüm 4.8'deki 6 sekme. Klip düzenleme + yeniden render. Facecam dikdörtgen seçici (canvas).
 - [ ] `clipper run` paneli de başlatır. Tarayıcıyı otomatik açar.
+- [ ] (r3) Reddet nedeni seçimi, `edited` kaydı (kırpma/başlık farkları), `feedback` yazımı (4.8, 4.9 Kademe 0)
+- [ ] (r3) Klip kartında adayın kaynakları rozet olarak görünsün (`chat`, `içerik`, `izleyici klibi`). İçerik yolunun `kind`/`reason`'ı da görünsün.
+- [ ] (r3) "Reddedilenler" görünümü: LLM'in elediği adaylar da listelensin. Kullanıcı "bu aslında iyiydi" diyerek kurtarabilsin (kurtarılanlar en değerli eğitim verisi, `feedback.decision=approved`, `reason=rescued`).
 
 **Bitti sayılması için:** VOD'dan gelen klipler panelde izlenip onaylanabiliyor, başlık düzenlenip yeniden render alınabiliyor.
 
@@ -565,6 +701,9 @@ Reddet/onay kararları ve reddetme nedenleri saklanır. Faz 8'de eşik kalibrasy
 - [ ] `hls_recorder.py` + Twitch/Kick/YouTube HLS çözümleyiciler (Bölüm 4.2), reklam segment filtresi, token yenileme
 - [ ] Chat istemcileri: `twitch/chat_irc.py` (anonim), `kick/chat_pusher.py` (anonim), `youtube/innertube.py` (anonim) + `youtube/chat_official.py` (yedek). Hepsinde otomatik yeniden bağlanma, kopma süresince "chat yok" işaretlenir ve dedektör o aralıkta tetiklemez)
 - [ ] Dedektörün akış modu + canlı ses analizi (her yeni segmentte)
+- [ ] (r3) **LiveTranscriber** + **ContentScanner** canlı görevleri (4.3b), gpu_pool öncelik kuralı, gerideyse parça atlama
+- [ ] (r3) Canlı izleyici klibi takibi (anonim GQL, 60 sn) ve canlı olay toplama (IRC USERNOTICE, Kick event'leri, YouTube paid/membership)
+- [ ] (r3) Panel "Canlı" sekmesinde üç yolun adayları ayrı renkte, içerik taramalarının skor çizgisi sinyal grafiğinin altında
 - [ ] Halka tampon temizliği, bekleyen kesimleri koruma
 - [ ] Session kapanışı (yayın bitti → 2 dk bekle → kaydı kapat, kalan işleri bitir)
 - [ ] `clipper calibrate <streamer>`: canlı yayında panelden "şimdi oldu" butonuna basılan anlar ile chat peak'leri arasındaki farkın medyanı → `lag_seconds` önerisi
@@ -584,8 +723,10 @@ Reddet/onay kararları ve reddetme nedenleri saklanır. Faz 8'de eşik kalibrasy
 ### Faz 8 — Sağlamlaştırma ve kalibrasyon
 - [ ] Çoklu yayıncı eşzamanlılığı (aynı anda 3–5 kanal). Kaynak limitleri (aynı anda max N render).
 - [ ] Saklama politikası: segmentler 15 dk, ham kesitler 7 gün, final klipler 30 gün (config). Disk %85 dolunca agresif temizlik + uyarı.
-- [ ] Eşik ayarı: onay/red geçmişinden yayıncı bazlı `threshold` ve `min_keep_score` önerisi (basit: reddedilenlerin skor dağılımına göre)
-- [ ] Performans istatistikleri (opsiyonel): YouTube/IG/X'ten yayınlanmış kliplerin izlenme sayısını günde bir çek (API izin veriyorsa). Hangi skor bandı ne kadar izleniyor, panelde göster.
+- [ ] (r3) **Öğrenilmiş skor modeli** (4.9 Kademe 2): `clipper learn`, numpy logistic regression, global + yayıncı bazlı, zaman bazlı test raporu, panelde "öneriyi uygula / geri al", versiyonlu ağırlıklar. ≥200 karar birikmeden komut "yetersiz veri" der ve çıkar.
+- [ ] (r3) **Performans sinyali** (4.9 Kademe 3, opsiyonel): `clip_stats` günlük çekim, izlenme hedefli ikinci model, panelde "hangi sinyal izlenme getiriyor" raporu
+- [ ] (r3, v2 opsiyonel) **Judge'a görüntü kareleri**: kesit içinden en yüksek skorlu 4–6 an (ses/chat tepe noktaları) 512 px genişlikte JPEG olarak Sonnet 5.5'e eklenir. Kategori bazlı aç/kapa (`llm.vision_categories`; oyun kategorilerinde açık, "Just Chatting"/"Sohbet"te kapalı). Ölçüt: açık/kapalı A/B ile onay oranı farkına bak, fark yoksa kapat.
+- [ ] (r3, v2 opsiyonel) **Bağlam özeti**: Haiku 5.5 her 5 dk'da son 5 dk transkript + önceki özetle "yayında şu ana kadar ne oldu" özetini (≤ 150 kelime) günceller. Özet judge ve ContentScanner prompt'larına eklenir. Maliyet ~$0.003/saat.
 - [ ] Başlangıçta otomatik çalışma: Windows'ta Task Scheduler kaydı oluşturan `clipper install-autostart`, Linux'ta systemd unit dosyası üreten komut
 - [ ] `README.md` (kurulum, `.env`, hesap bağlama adımları, sık hatalar)
 
@@ -615,6 +756,8 @@ Reddet/onay kararları ve reddetme nedenleri saklanır. Faz 8'de eşik kalibrasy
 | Kalem | Tahmin |
 |---|---|
 | Claude (Haiku ön eleme + Sonnet judge, ~150 yayın saati) | ~$15–35 |
+| Claude içerik yolu (Haiku 5.5, ~$0.01/saat × 150 saat) (r3) | ~$1.5 |
+| (v2) Judge'a görüntü kareleri | +~$5–10 |
 | X API (pay-per-use, ~200 gönderi) | ~$3 |
 | YouTube / Instagram / TikTok API | $0 |
 | Elektrik/donanım | mevcut PC |
