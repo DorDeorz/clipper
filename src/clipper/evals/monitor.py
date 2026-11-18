@@ -61,6 +61,14 @@ def rss_mb() -> float | None:
         k32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
         psapi = ctypes.windll.psapi  # type: ignore[attr-defined]
         k32.GetCurrentProcess.restype = wintypes.HANDLE
+        # The pseudo-handle is -1 as an unsigned pointer; without argtypes ctypes tries
+        # to pass it as a C int and overflows.
+        psapi.GetProcessMemoryInfo.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(PMC),
+            wintypes.DWORD,
+        ]
+        psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
         ok = psapi.GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(pmc), pmc.cb)
         return round(pmc.WorkingSetSize / 2**20, 1) if ok else None
     try:
@@ -85,6 +93,8 @@ def open_files() -> int | None:
 
         k32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
         k32.GetCurrentProcess.restype = wintypes.HANDLE
+        k32.GetProcessHandleCount.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        k32.GetProcessHandleCount.restype = wintypes.BOOL
         n = wintypes.DWORD()
         if k32.GetProcessHandleCount(k32.GetCurrentProcess(), ctypes.byref(n)):
             return int(n.value)
