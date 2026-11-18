@@ -28,10 +28,11 @@ def fmp4_hls(tmp_path_factory: pytest.TempPathFactory) -> Path:
             "-c:v", "libx264", "-g", "60", "-c:a", "aac", "-shortest",
             "-f", "hls", "-hls_time", "2", "-hls_playlist_type", "vod",
             "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init-0.mp4",
-            "-hls_segment_filename", str(out / "%d.mp4"),
-            str(out / "index.m3u8"),
+            "-hls_segment_filename", "%d.mp4",
+            "index.m3u8",
         ],
         check=True,
+        cwd=out,  # ffmpeg on Windows writes the init file relative to cwd, not the playlist
     )  # fmt: skip
     return out
 
