@@ -221,7 +221,7 @@ def test_full_twitch_vod_ingest(
     conn: sqlite3.Connection,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("clipper.platforms.twitch.vod.asyncio.sleep", _no_sleep)
+    monkeypatch.setattr("clipper.recorder.hls_vod.asyncio.sleep", _no_sleep)
     fake = FakeTwitch(ts_segments)
     cfg = Config(paths=PathsConfig(data_dir=tmp_path / "data"))
 
