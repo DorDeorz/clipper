@@ -700,12 +700,17 @@ Reddet/onay kararları `feedback` tablosuna yazılır (bkz. 4.9). Reddet butonu 
 **Bitti sayılması için:** Gerçek VOD'dan 5 klip üç düzende render edilip telefonda izlendiğinde altyazı senkronu ve kadraj düzgün.
 
 ### Faz 5 — Panel
-- [ ] FastAPI uygulaması, statik dosyalar, güvenli `/media`
-- [ ] Bölüm 4.8'deki 6 sekme. Klip düzenleme + yeniden render. Facecam dikdörtgen seçici (canvas).
-- [ ] `clipper run` paneli de başlatır. Tarayıcıyı otomatik açar.
-- [ ] (r3) Reddet nedeni seçimi, `edited` kaydı (kırpma/başlık farkları), `feedback` yazımı (4.8, 4.9 Kademe 0)
-- [ ] (r3) Klip kartında adayın kaynakları rozet olarak görünsün (`chat`, `içerik`, `izleyici klibi`). İçerik yolunun `kind`/`reason`'ı da görünsün.
-- [ ] (r3) "Reddedilenler" görünümü: LLM'in elediği adaylar da listelensin. Kullanıcı "bu aslında iyiydi" diyerek kurtarabilsin (kurtarılanlar en değerli eğitim verisi, `feedback.decision=approved`, `reason=rescued`).
+- [x] FastAPI uygulaması, statik dosyalar, güvenli `/media`
+  - Not: HTTP katmanı `panel/app.py`, veri/işlemler `panel/api.py` (HTTP'siz, test edilebilir). `/media` yolu `data_dir` içine `resolve()` + `is_relative_to` ile hapsedilir, dışarısı 404. `PANEL_PASSWORD` tanımlıysa her istek HTTP Basic ister; `panel.host` loopback değilse ve parola yoksa `clipper run` başlamaz. Endpoint'ler async ve workerlarla aynı event loop'ta, tek sqlite bağlantısını paylaşır. `/api/auth/{platform}/start` ve yayın "tekrar dene" Faz 7'de (şimdilik 501).
+- [x] Bölüm 4.8'deki 6 sekme. Klip düzenleme + yeniden render. Facecam dikdörtgen seçici (canvas).
+  - Not: Canlı sekmesi şimdilik session seçip sinyal grafiğini (SVG, aday işaretleri kaynağa göre renkli, altında içerik tarama skorları) gösteriyor; canlı durum Faz 6'da. Kırpma/hook değişince kaydetmek render'ı öncelik 5 ile kuyruğa koyar; sadece başlık/hashtag değişirse render yok. Facecam: "Kare getir" son kayıttan kare alır, kullanıcı kutuyu sürükleyerek çizer; API anahtarı varsa "Claude ile öner" de çıkar.
+- [x] `clipper run` paneli de başlatır. Tarayıcıyı otomatik açar.
+  - Not: `runner.py`: uvicorn + `worker.run_forever` aynı süreçte; Ctrl+C önce paneli sonra workerları temiz kapatır (uvicorn'un sinyali yeniden fırlatması kapatıldı). `--no-browser`. API anahtarı yoksa io havuzu (LLM) çalışmaz, işler kuyrukta bekler. LiveWatcher Faz 6'da eklenecek.
+- [x] (r3) Reddet nedeni seçimi, `edited` kaydı (kırpma/başlık farkları), `feedback` yazımı (4.8, 4.9 Kademe 0)
+  - Not: `feedback.py`. İlk düzenlemede LLM'in orijinal start/end/başlığı `llm_json.original`'a yazılır; onayda fark varsa `edited` + `start_delta`/`end_delta`/`title_edited`. Her kararda `features_snapshot` (aday özellikleri + prefilter/judge skorları) donar.
+- [x] (r3) Klip kartında adayın kaynakları rozet olarak görünsün (`chat`, `içerik`, `izleyici klibi`). İçerik yolunun `kind`/`reason`'ı da görünsün.
+- [x] (r3) "Reddedilenler" görünümü: LLM'in elediği adaylar da listelensin. Kullanıcı "bu aslında iyiydi" diyerek kurtarabilsin (kurtarılanlar en değerli eğitim verisi, `feedback.decision=approved`, `reason=rescued`).
+  - Not: Kartta hangi aşamada elendiği (prefilter/judge) ve ham kesit videosu görünür. Kurtarılan aday judge kırpması yoksa ham kesitin ilk `render.max_len` saniyesiyle render edilir.
 
 **Bitti sayılması için:** VOD'dan gelen klipler panelde izlenip onaylanabiliyor, başlık düzenlenip yeniden render alınabiliyor.
 

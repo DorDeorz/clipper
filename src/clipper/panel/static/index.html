@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>clipper paneli</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>clipper</h1>
+    <nav id="tabs">
+      <button data-tab="live">Canlı</button>
+      <button data-tab="clips" class="active">Klipler <span id="review-count" class="count"></span></button>
+      <button data-tab="pubs">Yayınlar</button>
+      <button data-tab="streamers">Yayıncılar</button>
+      <button data-tab="accounts">Hesaplar</button>
+      <button data-tab="costs">Maliyet &amp; Log</button>
+    </nav>
+    <div id="queue" class="muted"></div>
+  </header>
+  <main>
+    <section id="tab-live" hidden>
+      <div class="row">
+        <label>Session <select id="session-select"></select></label>
+        <label>Son <select id="signal-window">
+          <option value="1800">30 dk</option>
+          <option value="3600">1 saat</option>
+          <option value="0">tamamı</option>
+        </select></label>
+        <span class="legend">
+          <i class="dot src-reactive"></i>chat
+          <i class="dot src-content"></i>içerik
+          <i class="dot src-viewer_clip"></i>izleyici klibi
+        </span>
+      </div>
+      <div id="signal-chart" class="chart"></div>
+      <table id="session-table" class="grid"></table>
+    </section>
+
+    <section id="tab-clips">
+      <div class="row" id="clip-views">
+        <button data-view="review" class="active">İnceleme</button>
+        <button data-view="approved">Onaylananlar</button>
+        <button data-view="rejected_user">Reddettiklerim</button>
+        <button data-view="rejected_llm">Reddedilenler (LLM)</button>
+        <button data-view="working">İşlemde</button>
+      </div>
+      <div id="clip-list" class="cards"></div>
+    </section>
+
+    <section id="tab-pubs" hidden>
+      <table id="pub-table" class="grid"></table>
+    </section>
+
+    <section id="tab-streamers" hidden>
+      <div class="split">
+        <div>
+          <table id="streamer-table" class="grid"></table>
+          <button id="streamer-new">+ Yayıncı ekle</button>
+        </div>
+        <form id="streamer-form" hidden>
+          <h2 id="streamer-form-title">Yayıncı</h2>
+          <label>Ad <input name="display_name" required></label>
+          <label>Platform
+            <select name="platform"><option>twitch</option><option>kick</option><option>youtube</option></select>
+          </label>
+          <label>Kanal <input name="channel" required></label>
+          <label>Düzen
+            <select name="layout"><option>stack</option><option>blur</option><option>center</option></select>
+          </label>
+          <label class="check"><input type="checkbox" name="enabled"> Takip açık</label>
+          <label class="check"><input type="checkbox" name="permission_ok"> Yayıncı izni var</label>
+          <label>İzin notu <input name="permission_note"></label>
+          <label class="check"><input type="checkbox" name="auto_publish"> Otomatik yayınla</label>
+          <label>Anahtar kelimeler (virgülle) <input name="keywords"></label>
+          <fieldset>
+            <legend>Facecam</legend>
+            <div class="row">
+              <button type="button" id="fc-frame">Kare getir</button>
+              <button type="button" id="fc-suggest" hidden>Claude ile öner</button>
+              <button type="button" id="fc-clear">Facecam yok</button>
+              <span id="fc-info" class="muted"></span>
+            </div>
+            <canvas id="fc-canvas" width="640" height="360"></canvas>
+            <p class="muted">Karenin üstünde sürükleyerek facecam alanını çiz.</p>
+          </fieldset>
+          <div class="row">
+            <button type="submit">Kaydet</button>
+            <button type="button" id="streamer-cancel">Vazgeç</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <section id="tab-accounts" hidden>
+      <p class="muted">Hesap bağlama (YouTube, Instagram, X, TikTok) Faz 7 ile geliyor.</p>
+      <table id="account-table" class="grid"></table>
+    </section>
+
+    <section id="tab-costs" hidden>
+      <h2>LLM harcaması: <span id="month-usd"></span> (bu ay)</h2>
+      <div class="split">
+        <table id="cost-days" class="grid"></table>
+        <table id="cost-purposes" class="grid"></table>
+      </div>
+      <h2>Log (son 500)</h2>
+      <pre id="log-lines"></pre>
+    </section>
+  </main>
+  <div id="toast" hidden></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

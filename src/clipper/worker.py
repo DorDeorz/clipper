@@ -116,3 +116,47 @@ async def run_until_idle(
         if leftovers:
             await asyncio.gather(*leftovers, return_exceptions=True)
     return stats
+
+
+async def run_forever(
+    conn: sqlite3.Connection,
+    handler: Handler,
+    stop: asyncio.Event,
+    *,
+    pools: tuple[Pool, ...] = ("cpu", "gpu", "io"),
+    concurrency: dict[Pool, int] | None = None,
+    poll: float = 1.0,
+    recover_every: float = 300.0,
+) -> WorkStats:
+    """`clipper run` workers: claim jobs until `stop` is set. Running jobs are cancelled on
+    stop and go back to the queue (their `fail` marks them retryable)."""
+    conc = {**DEFAULT_CONCURRENCY, **(concurrency or {})}
+    jobs.recover_stale(conn)
+    last_recover = time.monotonic()
+    stats = WorkStats()
+    running: dict[Pool, set[asyncio.Task[None]]] = {p: set() for p in pools}
+    stopper = asyncio.create_task(stop.wait())
+    try:
+        while not stop.is_set():
+            for pool in pools:
+                running[pool] = {t for t in running[pool] if not t.done()}
+                while len(running[pool]) < conc[pool]:
+                    job = jobs.claim(conn, pool)
+                    if job is None:
+                        break
+                    running[pool].add(asyncio.create_task(_run_one(conn, job, handler, stats)))
+            if time.monotonic() - last_recover > recover_every:
+                jobs.recover_stale(conn)
+                last_recover = time.monotonic()
+            active = [t for ts in running.values() for t in ts if not t.done()]
+            await asyncio.wait(
+                [*active, stopper], timeout=poll, return_when=asyncio.FIRST_COMPLETED
+            )
+    finally:
+        stopper.cancel()
+        leftovers = [t for ts in running.values() for t in ts if not t.done()]
+        for t in leftovers:
+            t.cancel()
+        if leftovers:
+            await asyncio.gather(*leftovers, return_exceptions=True)
+    return stats
