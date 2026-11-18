@@ -38,7 +38,17 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _ensure_utf8_output() -> None:
+    """Turkish text and ✔/✘ marks must not crash on Windows code pages (e.g. cp1252 pipes)."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        encoding = (getattr(stream, "encoding", None) or "").lower().replace("-", "")
+        if reconfigure is not None and encoding != "utf8":
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    _ensure_utf8_output()
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command is None:

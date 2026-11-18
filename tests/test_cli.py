@@ -48,3 +48,28 @@ def test_doctor_runs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None
 def test_no_command_prints_help(capsys: pytest.CaptureFixture[str]) -> None:
     assert main([]) == 0
     assert "doctor" in capsys.readouterr().out
+
+
+def test_doctor_output_survives_cp1252_pipe(tmp_path: Path) -> None:
+    import os
+    import subprocess
+    import sys
+
+    env = {**os.environ, "PYTHONIOENCODING": "cp1252"}
+    res = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "clipper",
+            "--config",
+            str(_cfg(tmp_path)),
+            "--env",
+            str(tmp_path / ".env"),
+            "doctor",
+        ],
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+    assert res.returncode in (0, 1), res.stderr.decode("utf-8", "replace")
+    assert "Veritabanı".encode() in res.stdout
