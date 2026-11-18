@@ -30,6 +30,40 @@ class MonitoringConfig(_Strict):
     mode: Literal["anonymous", "official"] = "anonymous"
 
 
+class TwitchConfig(_Strict):
+    """Unofficial Twitch web endpoints. Kept in config so they can be fixed without code."""
+
+    gql_url: str = "https://gql.twitch.tv/gql"
+    # Public Client-ID of the twitch.tv website (no account needed).
+    client_id: str = "kimne78kx3ncx6brgo4mv6wki5h1ko"
+    usher_vod_url: str = "https://usher.ttvnw.net/vod/{vod_id}.m3u8"
+    usher_live_url: str = "https://usher.ttvnw.net/api/channel/hls/{login}.m3u8"
+    # Persisted query hashes (sha256). Empty string = send the raw query instead.
+    persisted_queries: dict[str, str] = Field(
+        default_factory=lambda: {
+            "VideoCommentsByOffsetOrCursor": (
+                "b70a3591ff0f4e0313d126c6a1502d79a1c02baebb288227c582044aa76adf6a"
+            ),
+        }
+    )
+    download_concurrency: int = 6
+
+
+class YouTubeConfig(_Strict):
+    """Unofficial YouTube innertube parameters."""
+
+    base_url: str = "https://www.youtube.com"
+    user_agent: str = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)"
+        " Chrome/131.0.0.0 Safari/537.36"
+    )
+    accept_language: str = "tr-TR,tr;q=0.9,en;q=0.8"
+    # Pre-accepted consent cookie for EU/TR consent walls.
+    consent_cookie: str = "SOCS=CAI"
+    yt_dlp: str = "yt-dlp"
+    vod_format: str = "bv*[height<=1080]+ba/b[height<=1080]/b"
+
+
 class PanelConfig(_Strict):
     host: str = "127.0.0.1"
     port: int = 8765
@@ -134,6 +168,8 @@ class Config(_Strict):
     paths: PathsConfig = Field(default_factory=PathsConfig)
     panel: PanelConfig = Field(default_factory=PanelConfig)
     monitoring: MonitoringConfig = Field(default_factory=MonitoringConfig)
+    twitch: TwitchConfig = Field(default_factory=TwitchConfig)
+    youtube: YouTubeConfig = Field(default_factory=YouTubeConfig)
     recorder: RecorderConfig = Field(default_factory=RecorderConfig)
     detector: DetectorConfig = Field(default_factory=DetectorConfig)
     transcribe: TranscribeConfig = Field(default_factory=TranscribeConfig)
