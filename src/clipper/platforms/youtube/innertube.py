@@ -4,15 +4,19 @@ isolated here; when JSON paths change, a `YouTubeParseError` with a clear messag
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import re
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
 from clipper.config import YouTubeConfig
+from clipper.detect.events import LiveEvent
+from clipper.live.chat import ChatSink
 from clipper.log import get_logger
 from clipper.models import ChatMessage, hash_user_id
 from clipper.util.timeutil import parse_iso
@@ -270,3 +274,189 @@ async def iter_chat_replay(
             return
         token = result.continuation
     raise YouTubeParseError("YouTube chat sayfalama sınırı aşıldı.")
+
+
+# ---- live -------------------------------------------------------------------------------
+
+_EVENT_RENDERERS = {
+    "liveChatPaidMessageRenderer": "superchat",
+    "liveChatPaidStickerRenderer": "superchat",
+    "liveChatMembershipItemRenderer": "membership",
+    "liveChatSponsorshipsGiftPurchaseAnnouncementRenderer": "gift_sub",
+}
+
+
+@dataclass(slots=True)
+class LivePage:
+    messages: list[ChatMessage]
+    events: list[LiveEvent]
+    continuation: str | None
+    timeout_ms: int
+
+
+def parse_live_response(data: dict[str, Any], default_timeout_ms: int = 5000) -> LivePage:
+    try:
+        cont = data["continuationContents"]["liveChatContinuation"]
+    except (KeyError, TypeError):
+        return LivePage([], [], None, default_timeout_ms)  # stream/chat ended
+    msgs: list[ChatMessage] = []
+    events: list[LiveEvent] = []
+    for action in cont.get("actions") or []:
+        item = (action.get("addChatItemAction") or {}).get("item")
+        if not item:
+            continue
+        try:
+            msg = renderer_to_message(item)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise YouTubeParseError(f"YouTube canlı chat mesajı okunamadı: {exc}") from exc
+        if msg is not None:
+            msgs.append(msg)
+        for name, kind in _EVENT_RENDERERS.items():
+            r = item.get(name)
+            if r is None:
+                continue
+            try:
+                ts = int(r.get("timestampUsec", "0")) / 1_000_000 or (msg.ts if msg else 0.0)
+            except ValueError:
+                ts = msg.ts if msg else 0.0
+            events.append(LiveEvent(ts, kind))
+    token: str | None = None
+    timeout = default_timeout_ms
+    for c in cont.get("continuations") or []:
+        for key in ("invalidationContinuationData", "timedContinuationData",
+                    "reloadContinuationData"):  # fmt: skip
+            d = c.get(key)
+            if d and d.get("continuation"):
+                token = str(d["continuation"])
+                timeout = int(d.get("timeoutMs") or default_timeout_ms)
+                break
+        if token:
+            break
+    return LivePage(msgs, events, token, timeout)
+
+
+async def fetch_live_chat_page(
+    client: httpx.AsyncClient, cfg: YouTubeConfig, video_id: str
+) -> WatchPage:
+    """`/live_chat?v=` page: api key, client version and the first live continuation."""
+    resp = await client.get(
+        f"{cfg.base_url}/live_chat",
+        params={"v": video_id},
+        headers=headers(cfg),
+        timeout=30,
+        follow_redirects=True,
+    )
+    if resp.status_code != 200:
+        raise YouTubeParseError(f"YouTube canlı chat sayfası açılamadı (HTTP {resp.status_code}).")
+    key = _KEY_RE.search(resp.text)
+    ver = _VER_RE.search(resp.text)
+    initial = extract_json_var(resp.text, "ytInitialData") or {}
+    token = None
+    for c in find_key(initial, "continuations"):
+        page = parse_live_response(
+            {"continuationContents": {"liveChatContinuation": {"continuations": c}}}
+        )
+        if page.continuation:
+            token = page.continuation
+            break
+    if not key or not ver or not token:
+        raise YouTubeParseError(
+            "YouTube canlı chat sayfası okunamadı (anahtar ya da continuation yok; chat"
+            " kapalı veya sayfa yapısı değişmiş olabilir)."
+        )
+    return WatchPage(video_id, key.group(1), ver.group(1), None, None, None, True, None, token)
+
+
+@dataclass(frozen=True, slots=True)
+class LiveStatus:
+    video_id: str | None
+    is_live: bool
+    title: str | None = None
+    viewers: int | None = None
+
+
+def parse_live_status(html: str) -> LiveStatus:
+    """`/channel/<id>/live` or `/@handle/live` page → current live video, if any."""
+    player = extract_json_var(html, "ytInitialPlayerResponse") or {}
+    details = player.get("videoDetails") or {}
+    vid = details.get("videoId")
+    live = bool(details.get("isLive"))
+    viewers = None
+    raw = details.get("viewCount")
+    if live and isinstance(raw, str) and raw.isdigit():
+        viewers = int(raw)
+    return LiveStatus(vid if live else None, live, details.get("title"), viewers)
+
+
+def channel_live_url(cfg: YouTubeConfig, channel: str) -> str:
+    if channel.startswith("UC") and len(channel) == 24:
+        return f"{cfg.base_url}/channel/{channel}/live"
+    return f"{cfg.base_url}/@{channel.lstrip('@')}/live"
+
+
+async def live_status(client: httpx.AsyncClient, cfg: YouTubeConfig, channel: str) -> LiveStatus:
+    resp = await client.get(
+        channel_live_url(cfg, channel), headers=headers(cfg), timeout=30, follow_redirects=True
+    )
+    if resp.status_code == 404:
+        raise YouTubeParseError(f"YouTube kanalı bulunamadı: {channel}")
+    if resp.status_code != 200:
+        raise YouTubeParseError(f"YouTube /live sayfası HTTP {resp.status_code}.")
+    return parse_live_status(resp.text)
+
+
+class YouTubeLiveChat:
+    def __init__(
+        self,
+        client: httpx.AsyncClient,
+        cfg: YouTubeConfig,
+        video_id: str,
+        *,
+        sleep: Callable[[float], Awaitable[None]] | None = None,
+    ) -> None:
+        self.client = client
+        self.cfg = cfg
+        self.video_id = video_id
+        self.sleep = sleep
+        self.ended = False
+
+    async def connect_once(self, sink: ChatSink, stop: asyncio.Event) -> None:
+        page = await fetch_live_chat_page(self.client, self.cfg, self.video_id)
+        token = page.chat_continuation
+        url = f"{self.cfg.base_url}/youtubei/v1/live_chat/get_live_chat"
+        seen: set[tuple[float, str, str]] = set()
+        while token and not stop.is_set():
+            resp = await self.client.post(
+                url,
+                params={"key": page.api_key, "prettyPrint": "false"},
+                json={"context": _client_context(page), "continuation": token},
+                headers=headers(self.cfg),
+                timeout=30,
+            )
+            if resp.status_code != 200:
+                raise YouTubeParseError(f"YouTube canlı chat HTTP {resp.status_code}.")
+            res = parse_live_response(resp.json())
+            for msg in res.messages:
+                key = (msg.ts, msg.user_id, msg.text)
+                if key in seen:
+                    continue
+                seen.add(key)
+                sink.message(msg)
+            for ev in res.events:
+                sink.event(ev)
+            if len(seen) > 5000:
+                seen.clear()
+            if res.continuation is None:
+                self.ended = True
+                raise YouTubeChatEnded("YouTube canlı chat bitti")
+            token = res.continuation
+            stop_wait = min(max(res.timeout_ms / 1000, 1.0), 10.0)
+            if self.sleep is not None:
+                await self.sleep(stop_wait)
+            else:
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(stop.wait(), stop_wait)
+
+
+class YouTubeChatEnded(YouTubeParseError):
+    pass

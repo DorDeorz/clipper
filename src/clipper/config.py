@@ -29,6 +29,11 @@ class MonitoringConfig(_Strict):
     """
 
     mode: Literal["anonymous", "official"] = "anonymous"
+    # Faz 6: how often the watcher checks whether streamers are live, and how long a
+    # stream must stay offline before its session is closed (ROADMAP: 2 min).
+    check_every_seconds: float = 60
+    offline_grace_seconds: float = 120
+    max_concurrent_sessions: int = 5
 
 
 class TwitchConfig(_Strict):
@@ -78,6 +83,27 @@ class KickConfig(_Strict):
     request_interval_seconds: float = 0.2
     retries: int = 4
     download_concurrency: int = 6
+    # Live chat: public Pusher app of kick.com (unofficial; may change, see ROADMAP 4.1).
+    pusher_url: str = (
+        "wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679"
+        "?protocol=7&client=js&version=8.4.0-rc2&flash=false"
+    )
+    pusher_channels: list[str] = Field(
+        default_factory=lambda: ["chatrooms.{chatroom_id}.v2", "channel.{channel_id}"]
+    )
+    # Pusher event name -> our event kind. Names other than ChatMessageEvent are not yet
+    # verified live (ROADMAP Faz 6); unknown events are only logged once.
+    pusher_events: dict[str, str] = Field(
+        default_factory=lambda: {
+            "App\\Events\\ChatMessageEvent": "message",
+            "App\\Events\\SubscriptionEvent": "sub",
+            "App\\Events\\GiftedSubscriptionsEvent": "gift_sub",
+            "App\\Events\\LuckyUsersWhoGotGiftSubscriptionsEvent": "ignore",
+            "App\\Events\\StreamHostEvent": "raid",
+            "App\\Events\\StreamerIsLive": "live",
+            "App\\Events\\StopStreamBroadcast": "offline",
+        }
+    )
 
 
 class YouTubeConfig(_Strict):

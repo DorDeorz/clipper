@@ -41,3 +41,18 @@ async def download_video(
     if res.returncode != 0 or not target.is_file():
         raise YtDlpError(f"yt-dlp başarısız: {res.stderr.strip()[-500:]}")
     return target
+
+
+async def live_hls_url(cfg: YouTubeConfig, video_id: str) -> str:
+    """HLS master URL of a live video (`yt-dlp -g`); the recorder takes it from there."""
+    exe = which(cfg.yt_dlp)
+    if exe is None:
+        raise YtDlpError("yt-dlp bulunamadı (YouTube canlı kayıt için gerekli).")
+    res = await run_tool(
+        str(exe), "--no-playlist", "-g", "-f", "best[protocol^=m3u8]/best",
+        f"https://www.youtube.com/watch?v={video_id}", timeout=120,
+    )  # fmt: skip
+    urls = [ln for ln in res.stdout.splitlines() if ln.startswith("http")]
+    if res.returncode != 0 or not urls:
+        raise YtDlpError(f"yt-dlp canlı URL veremedi: {res.stderr.strip()[-300:]}")
+    return urls[0]

@@ -212,6 +212,27 @@ def create_app(deps: PanelDeps) -> FastAPI:
     async def signals(session_id: int, last: float | None = 1800.0) -> dict[str, Any]:
         return api.session_signals(conn, session_id, last)
 
+    @app.get("/api/live")
+    async def live() -> list[dict[str, Any]]:
+        rows = conn.execute(
+            "SELECT st.id AS streamer_id, st.display_name, st.platform, st.channel,"
+            " s.id AS session_id, s.started_at, s.title, s.category,"
+            " (SELECT COUNT(*) FROM candidates c WHERE c.session_id = s.id) AS candidates"
+            " FROM sessions s JOIN streamers st ON st.id = s.streamer_id"
+            " WHERE s.source = 'live' AND s.status = 'recording' ORDER BY s.id DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    @app.post("/api/live/{streamer_id}/mark")
+    async def live_mark(streamer_id: int) -> dict[str, Any]:
+        from clipper.live.calibrate import CalibrateError, add_mark
+
+        try:
+            ts = add_mark(conn, streamer_id)
+        except CalibrateError as exc:
+            raise PanelError(str(exc), 404) from exc
+        return {"ts": ts}
+
     # ---- clips --------------------------------------------------------------------------
 
     @app.get("/api/clips")

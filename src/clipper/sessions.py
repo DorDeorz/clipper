@@ -12,6 +12,7 @@ from clipper.util.timeutil import iso_now
 
 PlatformName = Literal["twitch", "kick", "youtube"]
 CHAT_FILE = "chat.jsonl.gz"
+LIVE_CHAT_FILE = "chat.live.jsonl"  # appended while a live session runs
 
 
 def get_or_create_streamer(

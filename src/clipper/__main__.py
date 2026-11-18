@@ -42,6 +42,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_run = sub.add_parser("run", help="paneli ve sürekli çalışan iş kuyruğunu başlat")
     p_run.add_argument("--no-browser", action="store_true", help="tarayıcıyı otomatik açma")
+    p_run.add_argument(
+        "--no-live", action="store_true", help="canlı yayın takibini kapat (sadece panel + işler)"
+    )
 
     p_db = sub.add_parser("db", help="veritabanı işlemleri")
     db_sub = p_db.add_subparsers(dest="db_command", metavar="İŞLEM")
@@ -107,6 +110,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_fc = sub.add_parser("facecam", help="yayıncının facecam konumunu Claude ile öner")
     p_fc.add_argument("streamer", help="yayıncı adı ya da kanal")
     p_fc.add_argument("--apply", action="store_true", help="öneriyi kaydet ve düzeni stack yap")
+
+    p_cal = sub.add_parser("calibrate", help="panelde 'şimdi oldu' işaretlerinden lag_seconds öner")
+    p_cal.add_argument("streamer", help="yayıncı adı ya da kanal")
+    p_cal.add_argument("--apply", action="store_true", help="öneriyi yayıncıya kaydet")
 
     p_chat = sub.add_parser("chat-import", help="chat dosyasını ortak jsonl biçimine çevir")
     p_chat.add_argument("input", type=Path, help="TwitchDownloader .json veya .jsonl")
@@ -278,6 +285,41 @@ async def _kick_vods(cfg: Config, slug: str) -> int:
     return 0
 
 
+def _calibrate(cfg: Config, streamer: str, apply: bool) -> int:
+    import json as _json
+
+    from clipper.live.calibrate import calibrate
+
+    conn = db.open_db(cfg.db_path)
+    try:
+        row = conn.execute(
+            "SELECT id, detector_overrides FROM streamers WHERE display_name = ? OR channel = ?",
+            (streamer, streamer),
+        ).fetchone()
+        if row is None:
+            print(f"Hata: yayıncı bulunamadı: {streamer}", file=sys.stderr)
+            return 1
+        cal = calibrate(conn, int(row["id"]))
+        print(f"İşaret: {cal.marks}, eşleşen chat tepe noktası: {len(cal.delays)}")
+        if cal.delays:
+            print("Gecikmeler (sn): " + ", ".join(f"{d:.0f}" for d in cal.delays))
+        if cal.suggestion is None:
+            print("Öneri için en az 3 eşleşen işaret gerekli (panel > Canlı > 'Şimdi oldu').")
+            return 1
+        print(f"Önerilen lag_seconds: {cal.suggestion} (şu an: {cfg.detector.lag_seconds})")
+        if apply:
+            over = _json.loads(row["detector_overrides"]) if row["detector_overrides"] else {}
+            over["lag_seconds"] = cal.suggestion
+            conn.execute(
+                "UPDATE streamers SET detector_overrides = ? WHERE id = ?",
+                (_json.dumps(over), row["id"]),
+            )
+            print("Kaydedildi (yayıncıya özel ayar).")
+        return 0
+    finally:
+        conn.close()
+
+
 def _ensure_utf8_output() -> None:
     """Turkish text and ✔/✘ marks must not crash on Windows code pages (e.g. cp1252 pipes)."""
     for stream in (sys.stdout, sys.stderr):
@@ -320,12 +362,17 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         return doctor(cfg, secrets)
 
+    if args.command == "calibrate":
+        return _calibrate(cfg, args.streamer, args.apply)
+
     if args.command == "run":
         from clipper.panel.app import PanelConfigError
         from clipper.runner import run
 
         try:
-            return asyncio.run(run(cfg, secrets, open_browser=not args.no_browser))
+            return asyncio.run(
+                run(cfg, secrets, open_browser=not args.no_browser, live=not args.no_live)
+            )
         except PanelConfigError as exc:
             print(f"Hata: {exc}", file=sys.stderr)
             return 2
