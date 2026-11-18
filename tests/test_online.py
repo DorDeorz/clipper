@@ -38,10 +38,11 @@ def test_twitch_vod_endpoints() -> None:
             token, sig = await twitch_vod.get_vod_token(gql, vod_id)
             resp = await client.get(twitch_vod.usher_vod_url(TwitchConfig(), vod_id, token, sig))
             assert resp.status_code == 200 and "#EXTM3U" in resp.text
+            # Read well past the first page (~50-60 comments) so paging is exercised.
             n = 0
             async for _ in iter_vod_comments(gql, vod_id):
                 n += 1
-                if n >= 50:
+                if n >= 300:
                     break
             assert n > 0
 

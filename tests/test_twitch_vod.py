@@ -58,6 +58,7 @@ class FakeTwitch:
     def __init__(self, segments: list[Path]) -> None:
         self.segments = segments
         self.gql_bodies: list[dict[str, Any]] = []
+        self.comment_offsets: list[int] = []
         self.flaky_once = True
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -114,9 +115,10 @@ class FakeTwitch:
             return {"data": {"videoPlaybackAccessToken": {"value": "TOKEN", "signature": "SIG"}}}
         if name == "VideoCommentsByOffsetOrCursor":
             assert "extensions" in op  # persisted query
-            page = 0 if "contentOffsetSeconds" in op["variables"] else 1
-            if page == 1:
-                assert op["variables"]["cursor"] == "cur-b"
+            assert "cursor" not in op["variables"]  # cursors fail the integrity check
+            offset = op["variables"]["contentOffsetSeconds"]
+            self.comment_offsets.append(offset)
+            page = 0 if offset == 0 else 1
             return {"data": {"video": {"comments": COMMENT_PAGES[page]}}}
         return {"errors": [{"message": f"unknown op {name}"}]}
 
@@ -131,7 +133,36 @@ def test_vod_comments_paging() -> None:
 
     msgs = asyncio.run(go())
     assert [m.ts for m in msgs] == [1.0, 2.0, 4.0]
+    assert fake.comment_offsets == [0, 2]  # next page starts at the last offset seen
     assert msgs[1].text == "KEKW haha" and msgs[1].emotes == ["KEKW"]
+
+
+def test_vod_comments_same_second_page_steps_forward() -> None:
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        op = json.loads(request.content)[0]
+        off = op["variables"]["contentOffsetSeconds"]
+        calls.append(off)
+        if off == 0:
+            page = {
+                "edges": [_comment(f"x{i}", 0.5, "1", [{"text": "a"}]) for i in range(3)],
+                "pageInfo": {"hasNextPage": True},
+            }
+        else:
+            page = {
+                "edges": [_comment("y", 1.2, "2", [{"text": "b"}])],
+                "pageInfo": {"hasNextPage": False},
+            }
+        return httpx.Response(200, json=[{"data": {"video": {"comments": page}}}])
+
+    async def go() -> list[Any]:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            gql = TwitchGQL(client, TwitchConfig())
+            return [m async for m in iter_vod_comments(gql, VOD_ID)]
+
+    msgs = asyncio.run(go())
+    assert calls == [0, 1] and len(msgs) == 4
 
 
 def test_gql_errors_are_clear() -> None:
@@ -181,6 +212,7 @@ def test_full_twitch_vod_ingest(
     assert sess["title"] == "Efsane yayın" and sess["status"] == "ended"
     msgs = list(chatlog.read_jsonl(res.session_dir / "chat.jsonl.gz"))
     assert [m.ts for m in msgs] == [1.0, 2.0, 4.0]
+    assert fake.comment_offsets == [0, 2]  # next page starts at the last offset seen
     work = tmp_path / "data" / "downloads" / f"twitch-{VOD_ID}"
     assert not (work / "parts").exists() and not (work / "video.mp4").exists()
 
