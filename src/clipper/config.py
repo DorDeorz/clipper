@@ -98,6 +98,13 @@ class DetectorConfig(_Strict):
     pre_roll: float = 40
     post_roll: float = 25
     weights: DetectorWeights = Field(default_factory=DetectorWeights)
+    # z-score denominators never go below these (window sums; audio in dB).
+    floors: DetectorWeights = Field(
+        default_factory=lambda: DetectorWeights(rate=1.0, uniq=1.0, emote=1.0, audio=3.0)
+    )
+    peak_window: int = 10  # seconds after a trigger to search for the peak
+    viewer_clip_bonus: float = 1.5
+    viewer_clip_radius: float = 30
 
 
 class TranscribeConfig(_Strict):
