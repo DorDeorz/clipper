@@ -22,6 +22,16 @@ def test_defaults_match_roadmap() -> None:
     assert cfg.llm.judge_model == "claude-sonnet-5-5"
     assert cfg.render.width == 1080 and cfg.render.height == 1920
     assert cfg.recorder.quality_order[0] == "1080p60"
+    assert cfg.monitoring.mode == "anonymous"
+
+
+def test_monitoring_mode_validated(tmp_path: Path) -> None:
+    p = tmp_path / "c.yaml"
+    p.write_text("monitoring: { mode: official }\n", encoding="utf-8")
+    assert load_config(p).monitoring.mode == "official"
+    p.write_text("monitoring: { mode: sneaky }\n", encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_config(p)
 
 
 def test_example_config_loads_and_equals_defaults() -> None:

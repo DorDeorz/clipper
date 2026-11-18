@@ -20,6 +20,16 @@ class PathsConfig(_Strict):
     ffprobe: str = "ffprobe"
 
 
+class MonitoringConfig(_Strict):
+    """r2: monitoring (live status, chat, clips, VOD chat) works without accounts by default.
+
+    `anonymous` uses Twitch anonymous IRC/GQL, YouTube innertube and Kick Pusher.
+    `official` falls back to Twitch Helix / YouTube Data API (needs keys).
+    """
+
+    mode: Literal["anonymous", "official"] = "anonymous"
+
+
 class PanelConfig(_Strict):
     host: str = "127.0.0.1"
     port: int = 8765
@@ -123,6 +133,7 @@ class Secrets(BaseModel):
 class Config(_Strict):
     paths: PathsConfig = Field(default_factory=PathsConfig)
     panel: PanelConfig = Field(default_factory=PanelConfig)
+    monitoring: MonitoringConfig = Field(default_factory=MonitoringConfig)
     recorder: RecorderConfig = Field(default_factory=RecorderConfig)
     detector: DetectorConfig = Field(default_factory=DetectorConfig)
     transcribe: TranscribeConfig = Field(default_factory=TranscribeConfig)

@@ -2,6 +2,9 @@
 # against this file's directory.
 paths: { data_dir: ./data, ffmpeg: ffmpeg, ffprobe: ffprobe }
 panel: { host: 127.0.0.1, port: 8765 }
+# anonymous: no accounts/API keys needed for monitoring (default)
+# official:  Twitch Helix / YouTube Data API fallback (needs keys in .env)
+monitoring: { mode: anonymous }
 recorder:
   buffer_minutes: 15
   quality: "1080p60,1080p,936p60,720p60,best"
