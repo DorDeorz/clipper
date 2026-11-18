@@ -82,6 +82,7 @@ const table = (el, head, rows) => {
 // ---- tabs ---------------------------------------------------------------------------
 
 const LOADERS = {
+  vod: loadVod, setup: loadSetup,
   live: loadLive, clips: loadClips, pubs: loadPubs, streamers: loadStreamers,
   accounts: loadAccounts, costs: loadCosts,
 };
@@ -440,6 +441,155 @@ async function loadLearn() {
   box.replaceChildren(head, h("div", { class: "cards" }, ...cards));
 }
 
+// ---- new VOD import ---------------------------------------------------------------
+
+const fmtDur = (s) => fmtTime(s);
+let vodTimer = null;
+
+async function loadVod() {
+  const tasks = await call("GET", "/api/vod").catch(() => null);
+  const box = document.getElementById("vod-tasks");
+  if (!tasks) return;
+  box.replaceChildren(...(tasks.length ? tasks.map((t) => h("article", { class: "card" },
+    h("div", { class: "head" }, h("strong", {}, `${t.source} · ${t.ref}`),
+      h("span", { class: t.status === "failed" ? "warn" : "muted" },
+        { running: "işleniyor…", done: "bitti", failed: "hata" }[t.status])),
+    h("pre", { class: "task-lines" }, (t.error ? [...t.lines, `Hata: ${t.error}`] : t.lines).join("\n")),
+    t.status === "done" ? h("div", { class: "row" }, h("button", { onclick: () => showTab("clips") }, "Kliplere git"),
+      t.session_id ? h("span", { class: "muted" }, `Session #${t.session_id}`) : null) : null))
+    : [h("p", { class: "muted" }, "Henüz yayın eklenmedi.")]));
+  clearTimeout(vodTimer);
+  if (state.tab === "vod" && tasks.some((t) => t.status === "running")) vodTimer = setTimeout(loadVod, 2000);
+}
+
+async function startVod(text, source, extra = {}) {
+  const r = await act(() => call("POST", "/api/vod", { text, source: source || null, ...extra }), "Başladı.");
+  if (r) loadVod();
+}
+
+function setupVod() {
+  const f = document.getElementById("vod-form");
+  const fileOnly = () => {
+    for (const el of f.querySelectorAll(".file-only")) el.hidden = f.source.value !== "file";
+  };
+  f.source.addEventListener("change", fileOnly);
+  fileOnly();
+  f.addEventListener("submit", (e) => {
+    e.preventDefault();
+    if (!f.text.value.trim()) return toast("Link ya da id yaz.", true);
+    startVod(f.text.value, f.source.value, { streamer: f.streamer.value, chat: f.chat.value });
+    f.text.value = "";
+  });
+  document.getElementById("kick-list").addEventListener("click", async () => {
+    const ch = document.getElementById("kick-channel").value.trim();
+    if (!ch) return;
+    const rows = await act(() => call("GET", `/api/kick-vods?channel=${encodeURIComponent(ch)}`));
+    if (!rows) return;
+    table(document.getElementById("kick-table"), ["Tarih", "Süre", "Kategori", "Başlık", ""],
+      rows.length ? rows.map((v) => h("tr", {}, h("td", {}, (v.start_time || "").slice(0, 16)),
+        h("td", {}, fmtDur(v.duration)), h("td", {}, v.category), h("td", {}, v.title),
+        h("td", {}, h("button", { class: "ok", onclick: () => startVod(v.uuid, "kick") }, "Klip çıkar"))))
+        : [h("tr", {}, h("td", { colspan: 5, class: "muted" }, "Bitmiş VOD yok."))]);
+  });
+}
+
+// ---- setup ----------------------------------------------------------------------------
+
+async function loadSetup() {
+  const d = await act(() => call("GET", "/api/setup"));
+  if (!d) return;
+  document.getElementById("env-path").textContent = d.env_path ? `Dosya: ${d.env_path}` : "";
+  document.getElementById("restart-row").hidden = !(d.restart_needed && d.can_restart);
+  const f = document.getElementById("env-form");
+  const groups = {};
+  for (const k of d.env) (groups[k.group] ||= []).push(k);
+  const inputs = [];
+  f.replaceChildren(...Object.entries(groups).map(([g, keys]) => h("fieldset", {}, h("legend", {}, g),
+    ...keys.map((k) => {
+      const inp = h("input", { type: "password", autocomplete: "off", name: k.name,
+        placeholder: k.set ? "tanımlı (değiştirmek için yeni değer yaz)" : "boş" });
+      inputs.push(inp);
+      const extra = k.name === "CLIPPER_SECRET_KEY" && !k.set
+        ? h("button", { type: "button", onclick: async () => {
+          if (await act(() => call("POST", "/api/setup/secret-key"), "Gizli anahtar üretildi.")) loadSetup();
+        } }, "Üret") : null;
+      return h("div", { class: "keyrow" },
+        h("span", {}, h("span", { class: k.set ? "st-ok" : "st-warn" }, k.set ? "✔ " : "○ "), k.label),
+        h("div", { class: "row", style: "margin:0" }, k.name === "CLIPPER_SECRET_KEY" && k.set
+          ? h("span", { class: "muted" }, "tanımlı (bağlı hesapları şifrelediği için buradan değişmez)")
+          : inp, extra),
+        k.help ? h("span", {}) : null, k.help ? h("span", { class: "muted" }, k.help) : null);
+    }))),
+  h("div", { class: "row" }, h("button", { type: "submit", class: "ok" }, "Kaydet")));
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const values = {};
+    for (const i of inputs) if (i.value.trim()) values[i.name] = i.value.trim();
+    if (!Object.keys(values).length) return toast("Değişiklik yok.");
+    const r = await act(() => call("POST", "/api/setup/env", { values }), "Kaydedildi.");
+    if (r) { loadSetup(); loadBanner(); }
+  };
+}
+
+async function runChecks() {
+  const t = document.getElementById("check-table");
+  t.replaceChildren(h("tr", {}, h("td", { class: "muted" }, "Kontrol ediliyor…")));
+  const rows = await act(() => call("GET", "/api/setup/checks"));
+  if (!rows) return;
+  const mark = { ok: "✔", warn: "!", fail: "✘" };
+  table(t, ["", "Kontrol", "Sonuç"], rows.map((c) => h("tr", {},
+    h("td", { class: `st-${c.status}` }, mark[c.status] || "?"), h("td", {}, c.name), h("td", {}, c.detail))));
+}
+
+async function loadBanner() {
+  const d = await call("GET", "/api/setup").catch(() => null);
+  const b = document.getElementById("banner");
+  if (!d) return;
+  const missing = d.env.filter((k) => ["ANTHROPIC_API_KEY", "CLIPPER_SECRET_KEY"].includes(k.name) && !k.set);
+  if (missing.length) {
+    b.replaceChildren(h("span", {}, `İlk kurulum eksik: ${missing.map((k) => k.label).join(", ")}.`),
+      h("button", { onclick: () => showTab("setup") }, "Kuruluma git"));
+    b.hidden = false;
+  } else if (d.restart_needed && d.can_restart) {
+    b.replaceChildren(h("span", {}, "Yeni anahtarlar yeniden başlatınca devreye girer."),
+      h("button", { class: "ok", onclick: restart }, "Yeniden başlat"));
+    b.hidden = false;
+  } else {
+    b.hidden = true;
+  }
+  return d;
+}
+
+async function waitBack() {
+  for (let i = 0; i < 60; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    if (await fetch("/api/status").then((r) => r.ok).catch(() => false)) return location.reload();
+  }
+  toast("clipper yeniden açılmadı; masaüstü kısayolundan başlat.", true);
+}
+
+async function restart() {
+  if (await act(() => call("POST", "/api/system/restart"))) {
+    toast("Yeniden başlatılıyor…");
+    setTimeout(waitBack, 2000);
+  }
+}
+
+function setupSystem() {
+  document.getElementById("restart").addEventListener("click", restart);
+  document.getElementById("run-checks").addEventListener("click", runChecks);
+  document.getElementById("shortcut").addEventListener("click", async () => {
+    const r = await act(() => call("POST", "/api/setup/shortcut"));
+    if (r) toast(r.message);
+  });
+  document.getElementById("quit").addEventListener("click", async () => {
+    if (await act(() => call("POST", "/api/system/shutdown"))) {
+      document.body.replaceChildren(h("main", {}, h("h2", {}, "clipper kapatıldı."),
+        h("p", { class: "muted" }, "Tekrar açmak için masaüstündeki Clipper kısayolunu kullan.")));
+    }
+  });
+}
+
 // ---- streamers + facecam picker -----------------------------------------------------
 
 async function loadStreamers() {
@@ -579,6 +729,11 @@ document.getElementById("streamer-cancel").addEventListener("click", () => {
 });
 document.getElementById("streamer-form").addEventListener("submit", saveStreamer);
 setupCanvas();
-loadStatus().then(() => showTab(state.tab));
+setupVod();
+setupSystem();
+loadStatus().then(loadBanner).then((d) => {
+  const firstRun = d && d.env.some((k) => ["ANTHROPIC_API_KEY", "CLIPPER_SECRET_KEY"].includes(k.name) && !k.set);
+  showTab(firstRun ? "setup" : state.tab);
+});
 setInterval(loadStatus, 10000);
 setInterval(() => { if (state.tab === "live") { loadLiveNow(); loadSignals(); } }, 15000);

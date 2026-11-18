@@ -120,3 +120,58 @@ def uninstall(workdir: Path) -> str:
         f"{unit} silindi. Çalışıyorsa: systemctl --user disable --now clipper && "
         "systemctl --user daemon-reload"
     )
+
+
+# ---- desktop shortcut ---------------------------------------------------------------------
+
+
+def _ps_quote(s: str) -> str:
+    return "'" + s.replace("'", "''") + "'"
+
+
+def gui_python() -> str:
+    """pythonw.exe next to the venv's python on Windows (no console window)."""
+    exe = Path(sys.executable)
+    w = exe.with_name("pythonw.exe")
+    return str(w if w.is_file() else exe)
+
+
+def shortcut_plan(workdir: Path, config: Path, env: Path, home: Path | None = None) -> Plan:
+    """Double-click "Clipper": starts `clipper run` (or opens the panel if it already
+    runs). Windows: a .lnk on the Desktop that runs pythonw (no terminal). Linux: a
+    .desktop launcher."""
+    wd = workdir.resolve()
+    args = [
+        "-m", "clipper", "--config", str(config.resolve()), "--env", str(env.resolve()), "run",
+    ]  # fmt: skip
+    if sys.platform == "win32":
+        arg_line = " ".join(_cmd_quote(a) for a in args)
+        script = (
+            "$d=[Environment]::GetFolderPath('Desktop');"
+            "$s=(New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $d 'Clipper.lnk'));"
+            f"$s.TargetPath={_ps_quote(gui_python())};"
+            f"$s.Arguments={_ps_quote(arg_line)};"
+            f"$s.WorkingDirectory={_ps_quote(str(wd))};"
+            "$s.Description='clipper paneli';"
+            "$s.Save()"
+        )
+        return Plan(
+            "windows",
+            {},
+            [["powershell", "-NoProfile", "-NonInteractive", "-Command", script]],
+            "Masaüstüne 'Clipper' kısayolu eklendi. Çift tıklayınca panel açılır; kapatmak "
+            "için paneldeki 'Kapat' butonu.",
+        )
+    home = home or Path.home()
+    exec_line = " ".join(_systemd_quote(a) for a in [sys.executable, *args])
+    body = (
+        "[Desktop Entry]\nType=Application\nName=Clipper\nComment=clipper paneli\n"
+        f"Path={wd}\nExec={exec_line}\nTerminal=false\nCategories=AudioVideo;\n"
+    )
+    target = home / ".local" / "share" / "applications" / "clipper.desktop"
+    return Plan(
+        "desktop",
+        {target: body},
+        [],
+        f"Uygulama menüsüne 'Clipper' eklendi ({target}).",
+    )

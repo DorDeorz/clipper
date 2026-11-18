@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sqlite3
 import sys
 from collections.abc import Sequence
@@ -126,6 +127,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_auto.add_argument("--dry-run", action="store_true", help="sadece ne yapılacağını göster")
     sub.add_parser("uninstall-autostart", help="otomatik başlatmayı kaldır")
+    p_sc = sub.add_parser(
+        "install-shortcut", help="masaüstüne çift tıkla açılan 'Clipper' kısayolu"
+    )
+    p_sc.add_argument("--dry-run", action="store_true", help="sadece ne yapılacağını göster")
 
     p_chat = sub.add_parser("chat-import", help="chat dosyasını ortak jsonl biçimine çevir")
     p_chat.add_argument("input", type=Path, help="TwitchDownloader .json veya .jsonl")
@@ -376,8 +381,24 @@ def _calibrate(cfg: Config, streamer: str, apply: bool) -> int:
         conn.close()
 
 
+def _restart(argv: Sequence[str] | None) -> None:
+    """Start a fresh `clipper run` (new `.env` values) and leave this process."""
+    import subprocess
+
+    args = list(sys.argv[1:] if argv is None else argv)
+    if "--no-browser" not in args:
+        args.append("--no-browser")  # the open tab reconnects by itself
+    print("Yeniden başlatılıyor...", file=sys.stderr)
+    subprocess.Popen([sys.executable, "-m", "clipper", *args])
+
+
 def _ensure_utf8_output() -> None:
-    """Turkish text and ✔/✘ marks must not crash on Windows code pages (e.g. cp1252 pipes)."""
+    """Turkish text and ✔/✘ marks must not crash on Windows code pages (e.g. cp1252 pipes).
+    Under pythonw (desktop shortcut) there is no console: output goes to os.devnull."""
+    if sys.stdout is None or sys.stderr is None:
+        devnull = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115
+        sys.stdout = sys.stdout or devnull
+        sys.stderr = sys.stderr or devnull
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
         encoding = (getattr(stream, "encoding", None) or "").lower().replace("-", "")
@@ -440,7 +461,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
 
-    if args.command in ("install-autostart", "uninstall-autostart"):
+    if args.command in ("install-autostart", "uninstall-autostart", "install-shortcut"):
         import subprocess
 
         from clipper import autostart
@@ -449,7 +470,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.command == "uninstall-autostart":
                 print(autostart.uninstall(Path.cwd()))
                 return 0
-            plan = autostart.plan(Path.cwd(), args.config, args.env)
+            make = autostart.shortcut_plan if args.command == "install-shortcut" else autostart.plan
+            plan = make(Path.cwd(), args.config, args.env)
             autostart.install(plan, dry_run=args.dry_run)
         except (OSError, subprocess.CalledProcessError) as exc:
             detail = getattr(exc, "stderr", None) or exc
@@ -465,13 +487,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "run":
-        from clipper.panel.app import PanelConfigError
-        from clipper.runner import run
+        import webbrowser
 
+        from clipper.panel.app import PanelConfigError
+        from clipper.runner import RESTART, already_running, run
+
+        url = f"http://127.0.0.1:{cfg.panel.port}/"
+        if already_running(cfg.panel.host, cfg.panel.port):
+            print(f"clipper zaten çalışıyor: {url}", file=sys.stderr)
+            if not args.no_browser:
+                webbrowser.open(url)
+            return 0
         try:
-            return asyncio.run(
-                run(cfg, secrets, open_browser=not args.no_browser, live=not args.no_live)
+            rc = asyncio.run(
+                run(
+                    cfg,
+                    secrets,
+                    open_browser=not args.no_browser,
+                    live=not args.no_live,
+                    env_path=args.env.resolve(),
+                    config_path=args.config.resolve(),
+                )
             )
+            if rc == RESTART:
+                _restart(argv)
+            return rc
         except PanelConfigError as exc:
             print(f"Hata: {exc}", file=sys.stderr)
             return 2
