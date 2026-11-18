@@ -249,7 +249,8 @@ class Stages:
         wav = raw.with_name("raw.wav")
         out = raw.with_name("transcript.json")
         if not out.is_file():
-            await self.transcriber.transcribe(wav, out)
+            origin = self._llm_json(clip).get("cut", {}).get("t0")
+            await self.transcriber.transcribe(wav, out, origin=origin)
         self.conn.execute(
             "UPDATE clips SET transcript_path = ? WHERE candidate_id = ?", (str(out), candidate_id)
         )

@@ -122,7 +122,7 @@ def live_transcriber_task(
                 origin = await extract_range(
                     sess.conn, sess.session_id, a, b, wav, sess.cfg.paths.ffmpeg
                 )
-                segs = await transcriber.transcribe(wav, work / "live_chunk.json")
+                segs = await transcriber.transcribe(wav, work / "live_chunk.json", origin=origin)
             except Exception as exc:
                 log.warning("live transcribe failed", extra={"error": str(exc)})
                 cursor = b  # do not get stuck on a bad chunk

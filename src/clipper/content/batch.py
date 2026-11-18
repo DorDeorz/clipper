@@ -84,7 +84,7 @@ async def transcribe_session(
     t0 = await extract_session_audio(conn, session_id, wav, cfg.paths.ffmpeg)
     raw_json = work / "session_transcript.json"
     try:
-        segments = await transcriber.transcribe(wav, raw_json)
+        segments = await transcriber.transcribe(wav, raw_json, origin=t0)
     finally:
         wav.unlink(missing_ok=True)
     lines = from_whisper(segments, offset=t0)

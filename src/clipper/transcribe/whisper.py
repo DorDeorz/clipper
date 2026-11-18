@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import wave
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -100,16 +102,84 @@ class Transcriber:
             )
         return out
 
-    async def transcribe(self, wav: Path, out_json: Path) -> list[dict[str, Any]]:
-        loop = asyncio.get_running_loop()
-        try:
-            result = await loop.run_in_executor(self._pool, self._transcribe_sync, wav)
-        except TranscribeError:
-            raise
-        except Exception as exc:
-            raise TranscribeError(f"transkript başarısız: {exc}") from exc
+    async def transcribe(
+        self, wav: Path, out_json: Path, *, origin: float | None = None
+    ) -> list[dict[str, Any]]:
+        """Segments with times relative to the WAV. `origin` is the session time of the
+        WAV's 0 (needed only by the fake backend)."""
+        if self.cfg.backend == "fake":
+            result = fake_transcript(self.cfg, wav, origin)
+        else:
+            cached = self._cache_file(wav)
+            if cached is not None and cached.is_file():
+                result = json.loads(cached.read_text(encoding="utf-8"))
+            else:
+                loop = asyncio.get_running_loop()
+                try:
+                    result = await loop.run_in_executor(self._pool, self._transcribe_sync, wav)
+                except TranscribeError:
+                    raise
+                except Exception as exc:
+                    raise TranscribeError(f"transkript başarısız: {exc}") from exc
+                if cached is not None:
+                    atomic_write_text(cached, json.dumps(result, ensure_ascii=False))
         atomic_write_text(out_json, json.dumps(result, ensure_ascii=False))
         return result
 
+    def _cache_file(self, wav: Path) -> Path | None:
+        if self.cfg.cache_dir is None:
+            return None
+        h = hashlib.sha256()
+        with wav.open("rb") as f:
+            for block in iter(lambda: f.read(1 << 20), b""):
+                h.update(block)
+        key = f"{self.cfg.model}|{self.cfg.language}|{self.cfg.beam_size}|{h.hexdigest()}"
+        name = hashlib.sha256(key.encode()).hexdigest()
+        return Path(self.cfg.cache_dir) / f"{name}.json"
+
     def close(self) -> None:
         self._pool.shutdown(wait=False, cancel_futures=True)
+
+
+def _wav_seconds(wav: Path) -> float:
+    try:
+        with wave.open(str(wav), "rb") as w:
+            return w.getnframes() / float(w.getframerate() or 1)
+    except (OSError, wave.Error, EOFError):
+        return float("inf")
+
+
+def fake_transcript(cfg: TranscribeConfig, wav: Path, origin: float | None) -> list[dict[str, Any]]:
+    """TESTPLAN fake backend: lines from `fake_path` overlapping the WAV, shifted to WAV
+    time, with evenly spaced word timestamps."""
+    if cfg.fake_path is None or not Path(cfg.fake_path).is_file():
+        raise TranscribeError("transcribe.backend=fake ama transcribe.fake_path dosyası yok")
+    if origin is None:
+        raise TranscribeError("sahte transkript için ses başlangıç zamanı (origin) gerekli")
+    end = origin + _wav_seconds(wav)
+    out: list[dict[str, Any]] = []
+    for raw in Path(cfg.fake_path).read_text(encoding="utf-8").splitlines():
+        if not raw.strip():
+            continue
+        line = json.loads(raw)
+        s, e, text = float(line["start"]), float(line["end"]), str(line["text"])
+        if e <= origin or s >= end:
+            continue
+        tokens = text.split()
+        step = (e - s) / max(len(tokens), 1)
+        words = []
+        for i, tok in enumerate(tokens):
+            ws, we = s + i * step, s + (i + 1) * step
+            if we <= origin or ws >= end:
+                continue
+            words.append(
+                {"w": tok, "s": round(max(ws, origin) - origin, 3),
+                 "e": round(min(we, end) - origin, 3), "p": 1.0}
+            )  # fmt: skip
+        if not words:
+            continue
+        out.append(
+            {"start": words[0]["s"], "end": words[-1]["e"],
+             "text": " ".join(str(w["w"]) for w in words), "words": words}
+        )  # fmt: skip
+    return out
