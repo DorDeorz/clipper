@@ -32,6 +32,7 @@ class MediaSegment:
     title: str
     pdt: float | None  # EXT-X-PROGRAM-DATE-TIME (unix seconds)
     is_ad: bool = False
+    map_url: str | None = None  # EXT-X-MAP init section (fMP4/CMAF playlists)
 
 
 @dataclass(slots=True)
@@ -94,6 +95,7 @@ def parse_media(text: str, base_url: str) -> MediaPlaylist:
     duration = 0.0
     title = ""
     pdt: float | None = None
+    map_url: str | None = None
     ad_ranges: list[tuple[float, float]] = []
     for line in (ln.strip() for ln in text.splitlines()):
         if line.startswith("#EXT-X-TARGETDURATION:"):
@@ -101,6 +103,11 @@ def parse_media(text: str, base_url: str) -> MediaPlaylist:
         elif line.startswith("#EXT-X-MEDIA-SEQUENCE:"):
             pl.media_sequence = int(line.split(":", 1)[1])
             seq = pl.media_sequence
+        elif line.startswith("#EXT-X-MAP:"):
+            attrs = parse_attrs(line.split(":", 1)[1])
+            if "BYTERANGE" in attrs:
+                raise ValueError("EXT-X-MAP BYTERANGE desteklenmiyor")
+            map_url = urljoin(base_url, attrs["URI"])
         elif line.startswith("#EXT-X-PROGRAM-DATE-TIME:"):
             pdt = parse_iso(line.split(":", 1)[1])
         elif line.startswith("#EXT-X-DATERANGE:"):
@@ -130,6 +137,7 @@ def parse_media(text: str, base_url: str) -> MediaPlaylist:
                     title=title,
                     pdt=pdt,
                     is_ad=is_ad,
+                    map_url=map_url,
                 )
             )
             seq += 1
