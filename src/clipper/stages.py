@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -95,7 +95,13 @@ class Stages:
         *,
         transcriber: Transcriber | None = None,
         llm: LLMClient | None = None,
+        on_rendered: Callable[[int], object] | None = None,
+        extra: Callable[[jobs.Job], Awaitable[None]] | None = None,
+        extra_types: frozenset[str] = frozenset(),
     ) -> None:
+        self.on_rendered = on_rendered
+        self.extra = extra
+        self.extra_types = extra_types
         self.conn = conn
         self.cfg = cfg
         self.transcriber = transcriber
@@ -158,6 +164,9 @@ class Stages:
     # ---- handlers ------------------------------------------------------------------------
 
     async def handle(self, job: jobs.Job) -> None:
+        if self.extra is not None and job.type in self.extra_types:
+            await self.extra(job)
+            return
         session_handler = {
             "session_transcribe": self.handle_session_transcribe,
             "content_scan": self.handle_content_scan,
@@ -491,3 +500,8 @@ class Stages:
             (str(res.final), str(res.thumb), json.dumps(data, ensure_ascii=False), candidate_id),
         )
         self._set_status(candidate_id, "rendered")
+        if self.on_rendered is not None:
+            try:
+                self.on_rendered(int(clip["id"]))
+            except Exception as exc:  # auto-publish must never fail the render
+                log.warning("after-render hook failed", extra={"error": str(exc)})

@@ -61,4 +61,9 @@ publish:
   min_gap_minutes: { youtube: 90, instagram: 120, x: 60, tiktok: 120 }
   daily_cap: { youtube: 8, instagram: 6, x: 10, tiktok: 6 }
   auto_publish_min_score: 85
+  cross_platform_gap_minutes: 15   # aynı klip platformlar arasında bu arayla
+  youtube_privacy: unlisted        # public | unlisted | private
+  graph_api_version: v25.0         # Instagram (Facebook Login for Business)
+  tiktok_mode: inbox               # inbox | direct (direct için audit gerekir)
+  tiktok_audit_passed: false       # sadece TikTok audit'i geçtiyse true yap
 streamers: []

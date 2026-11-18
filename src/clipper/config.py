@@ -261,6 +261,22 @@ class PublishConfig(_Strict):
         default_factory=lambda: {"youtube": 8, "instagram": 6, "x": 10, "tiktok": 6}
     )
     auto_publish_min_score: int = 85
+    # Same clip on several platforms: each next platform at least this much later.
+    cross_platform_gap_minutes: int = 15
+    youtube_privacy: Literal["public", "unlisted", "private"] = "unlisted"
+    youtube_category_id: str = "20"
+    youtube_chunk_mb: int = 8
+    # Instagram via Facebook Login for Business (resumable upload needs it).
+    graph_api_version: str = "v25.0"
+    instagram_poll_seconds: float = 10
+    instagram_poll_timeout_seconds: float = 300
+    x_chunk_mb: int = 4
+    tiktok_mode: Literal["inbox", "direct"] = "inbox"
+    # Direct post stays off until the user confirms the TikTok audit passed.
+    tiktok_audit_passed: bool = False
+    tiktok_privacy_level: str = "SELF_ONLY"
+    tiktok_chunk_mb: int = 10
+    status_poll_seconds: float = 30
 
 
 class StreamerConfig(_Strict):
@@ -283,6 +299,15 @@ class Secrets(BaseModel):
     twitch_client_id: SecretStr | None = None
     twitch_client_secret: SecretStr | None = None
     youtube_api_key: SecretStr | None = None
+    # Publishing OAuth clients (Faz 7).
+    youtube_client_id: SecretStr | None = None
+    youtube_client_secret: SecretStr | None = None
+    meta_app_id: SecretStr | None = None
+    meta_app_secret: SecretStr | None = None
+    x_client_id: SecretStr | None = None
+    x_client_secret: SecretStr | None = None
+    tiktok_client_key: SecretStr | None = None
+    tiktok_client_secret: SecretStr | None = None
     panel_password: SecretStr | None = None
 
     @classmethod

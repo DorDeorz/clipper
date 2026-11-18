@@ -19,7 +19,7 @@ from clipper.log import get_logger
 log = get_logger("worker")
 
 Handler = Callable[[Job], Awaitable[None]]
-DEFAULT_CONCURRENCY: dict[Pool, int] = {"cpu": 2, "gpu": 1, "io": 4}
+DEFAULT_CONCURRENCY: dict[Pool, int] = {"cpu": 2, "gpu": 1, "io": 4, "pub": 2}
 HEARTBEAT_SECONDS = 60.0
 
 

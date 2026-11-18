@@ -56,10 +56,10 @@ Claude Code ilgili aşamaya gelince bunları kullanıcıdan istesin, beklerken d
 
 - [ ] **Anthropic API key** → `.env` içinde `ANTHROPIC_API_KEY`
 - [ ] *(Opsiyonel, yedek)* **Twitch Developer app**: sadece anonim GQL bozulursa Helix yedeği için. İzleme için gerekmez.
-- [ ] **Google Cloud projesi** → YouTube Data API v3 etkin. OAuth consent screen ve OAuth Client (tip: *Desktop app*). **Sadece YouTube'a yükleme yapmak için.** Test modunda refresh token'lar ~7 günde düşebilir; uygulamayı "In production"a al veya haftalık yeniden yetkilendir.
+- [ ] **Google Cloud projesi** → YouTube Data API v3 etkin. OAuth consent screen ve OAuth Client (tip: *Desktop app*), `.env`: `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`. **Sadece YouTube'a yükleme yapmak için.** Test modunda refresh token'lar ~7 günde düşebilir; uygulamayı "In production"a al veya haftalık yeniden yetkilendir.
 - [ ] *(Opsiyonel, yedek)* **YouTube Data API key**: sadece innertube chat bozulursa resmi API yedeği için. İzleme için gerekmez.
-- [ ] **Meta Developer app** + Instagram **Professional (Business/Creator)** hesap. İzin: `instagram_business_content_publish` (Instagram Login) veya `instagram_content_publish` (Facebook Login). Hesap app'te admin/tester rolündeyse app review olmadan kendi hesabımıza paylaşabiliriz.
-- [ ] **TikTok Developer app** + "Content Posting API" ürünü + Login Kit. Redirect URI HTTPS olmak zorunda (gerekirse GitHub Pages'te tek sayfalık redirect). Audit yokken her şey `SELF_ONLY` kalır. Bu yüzden varsayılan mod **inbox (taslak)**.
+- [ ] **Meta Developer app** (Facebook Login for Business) + Facebook Sayfasına bağlı Instagram **Professional (Business/Creator)** hesap. İzinler: `instagram_basic`, `instagram_content_publish`, `pages_show_list`, `pages_read_engagement` (resumable yükleme sadece Facebook Login ile var). Redirect `http://127.0.0.1:8765/callback/instagram`. Hesap app'te admin/tester rolündeyse app review olmadan kendi hesabımıza paylaşabiliriz.
+- [ ] **TikTok Developer app** + "Content Posting API" ürünü + Login Kit (Desktop). Redirect `http://127.0.0.1:8765/callback/tiktok` (desktop tipinde loopback serbest; web tipinde HTTPS gerekir). Audit yokken her şey `SELF_ONLY` kalır. Bu yüzden varsayılan mod **inbox (taslak)**.
 - [ ] **X Developer hesabı** (pay-per-use, kredi yüklü). OAuth 2.0 PKCE, scope: `tweet.write tweet.read users.read media.write offline.access`. Redirect: `http://127.0.0.1:8765/callback/x`
 - [ ] **Yayıncı izinleri**: her yayıncı için yazılı izin. Panelde `permission_note` ve izin belgesi yolu doldurulacak; izni olmayan yayıncıda yayınlama butonu kilitli olacak.
 - [ ] Donanım: önerilen NVIDIA GPU (≥8 GB VRAM), ≥200 GB SSD, sabit upload hızı.
@@ -542,7 +542,7 @@ class Publisher(Protocol):
 **YouTube (`youtube.py`)**
 - Scope `https://www.googleapis.com/auth/youtube.upload`. Resumable upload: `POST https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status` (metadata) → `Location` URL'ine 8 MB chunk'larla `PUT` (Content-Range). Kopmada `Content-Range: bytes */size` ile kaldığı yeri sor.
 - `snippet.title` (≤100), `description`, `tags`, `categoryId=20` (Gaming), `status.privacyStatus` (config: public/unlisted), `selfDeclaredMadeForKids=false`. 9:16 ve ≤3 dk otomatik Short olur.
-- Kota: upload ~100 birim; Haziran 2026'dan beri ayrı "Video Uploads" kovası. Günlük sayaç tut. *(Claude Code: güncel kota sayfasından doğrula.)*
+- Kota (doğrulandı 2026-11): `videos.insert` ayrı kovada, çağrı başı 1 birim, günde 100 yükleme. Günlük sınırı `publish.daily_cap` tutar.
 
 **Instagram Reels (`instagram.py`)** — public URL gerektirmeyen resumable yol
 1. `POST /{ig-user-id}/media` `media_type=REELS&upload_type=resumable&caption=...&share_to_feed=true` → container `id` + `uri`
@@ -550,7 +550,7 @@ class Publisher(Protocol):
 3. `GET /{container-id}?fields=status_code` → `FINISHED` olana kadar 10 sn arayla bekle (`ERROR` → failed)
 4. `POST /{ig-user-id}/media_publish?creation_id=<container-id>` → media id. Permalink için `GET /{media-id}?fields=permalink`
 - Yayından önce `GET /{ig-user-id}/content_publishing_limit` kontrol et.
-- Graph API sürümünü config'te tut. *(Claude Code: Instagram Login vs Facebook Login host'larını — `graph.instagram.com` / `graph.facebook.com` — güncel dokümana göre seç.)*
+- Graph API sürümü config'te (`publish.graph_api_version`). Resumable yükleme sadece Facebook Login for Business ile var: host `graph.facebook.com`, token Page token (doğrulandı 2026-11).
 
 **X (`x.py`)**
 - OAuth 2.0 PKCE (user context). Media upload v2 chunked akış: initialize → append (≤ 5 MB parçalar) → finalize → `processing_info` bitene kadar status poll. Sonra `POST https://api.x.com/2/tweets` `{"text": ..., "media": {"media_ids": [id]}}`.
@@ -742,11 +742,17 @@ Reddet/onay kararları `feedback` tablosuna yazılır (bkz. 4.9). Reddet butonu 
 **Bitti sayılması için:** Bir Twitch ve bir Kick yayını 2 saat boyunca kesintisiz kaydediliyor. Adaylar yayın sırasında oluşuyor, yayın bitmeden klipler panelde görünüyor. Bellek/disk sabit kalıyor.
 
 ### Faz 7 — Yayınlama
-- [ ] `oauth.py` + panel "Hesap bağla" akışı
-- [ ] Sıra: **YouTube → Instagram → X → TikTok (inbox)**. Her biri için upload, status, hata eşlemesi.
-- [ ] `scheduler.py` (aralık, günlük limit, izin kontrolü: `permission_ok=0` ise asla yayınlama)
-- [ ] Auto-publish kuralı: `auto_publish=1` **ve** `llm_score ≥ auto_publish_min_score` **ve** flag'ler temiz (`music_risk`, `nsfw`, `sensitive_topic` false) → otomatik onay
-- [ ] Testler: her publisher için `httpx.MockTransport` ile tam akış (chunk'lı upload, kopma sonrası devam, 429 backoff, token yenileme)
+- [x] `oauth.py` + panel "Hesap bağla" akışı
+  - Not: `publish/oauth.py`. Uç noktalar resmi dokümandan (2026-11) doğrulandı: Google `accounts.google.com/o/oauth2/v2/auth` + `oauth2.googleapis.com/token` (Desktop app, PKCE S256, `access_type=offline&prompt=consent`); X `x.com/i/oauth2/authorize` + `api.x.com/2/oauth2/token` (secret varsa Basic auth); TikTok `www.tiktok.com/v2/auth/authorize/` (`client_key`, virgüllü scope, **hex** SHA256 code challenge) + `open.tiktokapis.com/v2/oauth/token/`; Meta manuel code akışı (`www.facebook.com/<v>/dialog/oauth` → `graph.facebook.com/<v>/oauth/access_token`) + uzun ömürlü token + `/me/accounts`'tan Page token ve `instagram_business_account`. Token'lar Fernet ile `oauth_tokens`'ta, süresi dolmadan 2 dk önce yenilenir (X ve TikTok refresh token'ı döndürür, yenisi kaydedilir). Panel: Hesaplar sekmesi (bağla / kaldır), `/api/auth/{platform}/start`, `/callback/{platform}`. `.env`: `YOUTUBE_CLIENT_ID/SECRET`, `META_APP_ID/SECRET`, `X_CLIENT_ID/SECRET`, `TIKTOK_CLIENT_KEY/SECRET`.
+- [x] Sıra: **YouTube → Instagram → X → TikTok (inbox)**. Her biri için upload, status, hata eşlemesi.
+  - Not: YouTube resumable (256 KiB katı chunk, 308 + `Range` ile devam, `bytes */N` sorgusu, 404'te yeni oturum). Kota: `videos.insert` artık ayrı kovada, **çağrı başı 1 birim, günde 100 yükleme** (eski "~100 birim" bilgisi güncel değil); günlük sınırı `daily_cap` tutuyor. Instagram: resumable yükleme sadece **Facebook Login for Business** uygulamalarında var, bu yüzden host `graph.facebook.com`, token Page token; Graph sürümü `publish.graph_api_version`. 24 saat limiti iki farklı rakamla geçiyor (100 / 50), `content_publishing_limit` okunuyor. X: v2 `/2/media/upload/initialize`, `/{id}/append` (multipart, ≤5 MB, 4 MiB kullanıyoruz), `/{id}/finalize`, `GET /2/media/upload?command=STATUS`, `POST /2/tweets`. TikTok: chunk 5–64 MB, son parça artığı alır (≤128 MB), 5 MB altı tek parça; `status/fetch` `SEND_TO_USER_INBOX` → panelde "TikTok taslaklarında". Direct mod kodda var ama `tiktok_mode: direct` **ve** `tiktok_audit_passed: true` olmadan çalışmaz (audit onayı kullanıcıdan gelmeli). Kopma sonrası devam durumu `publications.state`'te (şema v3). 429/5xx → `Retry-After` ya da üstel bekleme, 401 → "hesabı yeniden bağla", diğer 4xx → `failed` + platform mesajı.
+  - Not: TikTok desktop Login Kit'te `http://127.0.0.1:<port>/callback/` yönlendirmesine izin var; Bölüm 2'deki "HTTPS zorunlu" notu desktop uygulama tipinde geçerli değil. Meta'da loopback yönlendirmenin kabul edildiği gerçek testte doğrulanacak.
+- [x] `scheduler.py` (aralık, günlük limit, izin kontrolü: `permission_ok=0` ise asla yayınlama)
+  - Not: `publish/scheduler.py`. Aynı klip platformlar arasında `cross_platform_gap_minutes` (15) arayla gider. İzin hem planlarken hem yüklemeden hemen önce (`publish/runner.py`) kontrol edilir; panel izinsiz yayıncıda platform seçili onayı 403 ile reddeder. Hesabı bağlı olmayan platform `failed` + "hesap bağlı değil" olarak görünür, bağlandıktan sonra "Tekrar dene". Yayın işleri ayrı `pub` havuzunda (LLM anahtarı olmadan da çalışır).
+- [x] Auto-publish kuralı: `auto_publish=1` **ve** `llm_score ≥ auto_publish_min_score` **ve** flag'ler temiz (`music_risk`, `nsfw`, `sensitive_topic` false) → otomatik onay
+  - Not: Render bitince çalışır, yayıncının `publish_targets`'ına planlar. Flag bilgisi eksikse otomatik onay yok. Otomatik onaylar `feedback`'e yazılmaz (insan kararı değil).
+- [x] Testler: her publisher için `httpx.MockTransport` ile tam akış (chunk'lı upload, kopma sonrası devam, 429 backoff, token yenileme)
+  - Not: `tests/test_publish.py` (23 test).
 
 **Bitti sayılması için:** Panelden onaylanan bir klip test hesaplarında YouTube'a (unlisted), Instagram'a, X'e yayınlanıyor, TikTok inbox'a düşüyor. Linkler panelde görünüyor.
 

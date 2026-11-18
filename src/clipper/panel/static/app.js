@@ -280,7 +280,11 @@ function clipCard(c) {
       h("div", { class: "row" }, h("button", { class: "ok", onclick: async () => {
         await save();
         const r = await act(() => call("POST", `/api/clips/${c.clip_id}/approve`, { platforms: [...chosen] }));
-        if (r) { toast(r.decision === "edited" ? "Onaylandı (düzenlenmiş)." : "Onaylandı."); loadClips(); loadStatus(); }
+        if (r) {
+          const base = r.decision === "edited" ? "Onaylandı (düzenlenmiş)." : "Onaylandı.";
+          toast(r.planned ? `${base} ${r.planned} yayın planlandı.` : base);
+          loadClips(); loadStatus();
+        }
       } }, "Onayla")),
       h("div", { class: "reasons" }, h("span", { class: "muted" }, "Reddet:"),
         ...(state.status?.reject_reasons || Object.keys(REASON_LABEL)).map((r) =>
@@ -325,25 +329,58 @@ function clipCard(c) {
 
 // ---- publications / accounts / costs ------------------------------------------------
 
+const PUB_STATUS = {
+  scheduled: "planlandı", uploading: "yükleniyor", processing: "işleniyor", retrying: "tekrar denenecek",
+  published: "yayında", inbox: "TikTok taslaklarında", failed: "başarısız",
+};
+
 async function loadPubs() {
   const rows = await act(() => call("GET", "/api/publications"));
   if (!rows) return;
+  const retry = (p) => h("button", { onclick: async () => {
+    if (await act(() => call("POST", `/api/publications/${p.id}/retry`), "Tekrar kuyrukta.")) loadPubs();
+  } }, "Tekrar dene");
   table(document.getElementById("pub-table"),
-    ["#", "Klip", "Yayıncı", "Platform", "Durum", "Planlanan", "Link", "Hata"],
+    ["#", "Klip", "Yayıncı", "Platform", "Durum", "Planlanan", "Link", "Hata", ""],
     rows.length ? rows.map((p) => h("tr", {}, h("td", {}, p.id), h("td", {}, p.title || p.clip_id),
-      h("td", {}, p.streamer), h("td", {}, `${p.platform} / ${p.account}`), h("td", {}, p.status),
+      h("td", {}, p.streamer), h("td", {}, `${p.platform} / ${p.account}`),
+      h("td", {}, PUB_STATUS[p.status] || p.status),
       h("td", {}, p.scheduled_at || ""),
       h("td", {}, p.url ? h("a", { href: p.url, target: "_blank", rel: "noopener" }, "aç") : ""),
-      h("td", {}, p.error || "")))
-      : [h("tr", {}, h("td", { colspan: 8, class: "muted" }, "Henüz yayın yok."))]);
+      h("td", {}, p.error || ""),
+      h("td", {}, ["failed", "retrying"].includes(p.status) ? retry(p) : "")))
+      : [h("tr", {}, h("td", { colspan: 9, class: "muted" }, "Henüz yayın yok."))]);
+}
+
+async function connectAccount(platform) {
+  const name = document.getElementById(`acc-name-${platform}`).value.trim();
+  const r = await act(() => call("POST", `/api/auth/${platform}/start`, name ? { account: name } : {}));
+  if (r) {
+    window.open(r.url, "_blank", "noopener");
+    toast("Yetki sayfası açıldı. Onaylayınca bu sekmeyi yenile.");
+  }
 }
 
 async function loadAccounts() {
-  const rows = await act(() => call("GET", "/api/accounts"));
-  if (!rows) return;
-  table(document.getElementById("account-table"), ["Platform", "Hesap", "Güncellendi"],
-    rows.length ? rows.map((a) => h("tr", {}, h("td", {}, a.platform), h("td", {}, a.account), h("td", {}, a.updated_at)))
-      : [h("tr", {}, h("td", { colspan: 3, class: "muted" }, "Bağlı hesap yok."))]);
+  const d = await act(() => call("GET", "/api/accounts"));
+  if (!d) return;
+  const note = document.getElementById("account-note");
+  note.textContent = d.secret_key ? ""
+    : "CLIPPER_SECRET_KEY .env'de yok: önce `uv run clipper keygen` ile üretip ekle.";
+  table(document.getElementById("platform-table"), ["Platform", "Uygulama bilgileri", "Hesap adı (isteğe bağlı)", ""],
+    d.platforms.map((p) => h("tr", {}, h("td", {}, p.platform),
+      h("td", {}, p.configured ? "hazır" : h("span", { class: "warn" }, ".env'de yok")),
+      h("td", {}, h("input", { id: `acc-name-${p.platform}`, placeholder: "otomatik" })),
+      h("td", {}, h("button", { disabled: !p.configured || !d.secret_key,
+        onclick: () => connectAccount(p.platform) }, "Hesap bağla")))));
+  table(document.getElementById("account-table"), ["Platform", "Hesap", "Güncellendi", ""],
+    d.accounts.length ? d.accounts.map((a) => h("tr", {}, h("td", {}, a.platform), h("td", {}, a.account),
+      h("td", {}, a.updated_at),
+      h("td", {}, h("button", { class: "bad", onclick: async () => {
+        const url = `/api/accounts/${encodeURIComponent(a.platform)}/${encodeURIComponent(a.account)}`;
+        if (await act(() => call("DELETE", url), "Hesap kaldırıldı.")) loadAccounts();
+      } }, "Kaldır"))))
+      : [h("tr", {}, h("td", { colspan: 4, class: "muted" }, "Bağlı hesap yok."))]);
 }
 
 async function loadCosts() {
