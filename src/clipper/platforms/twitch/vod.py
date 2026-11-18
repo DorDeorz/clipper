@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import random
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,9 +10,9 @@ import httpx
 
 from clipper.config import TwitchConfig
 from clipper.log import get_logger
-from clipper.media import concat_copy
+from clipper.media import MediaError
 from clipper.platforms.twitch.gql import GQLOperation, TwitchGQL, TwitchGQLError
-from clipper.recorder.m3u8 import parse_master, parse_media, pick_variant
+from clipper.recorder.hls_vod import Progress, download_hls_vod
 from clipper.util.timeutil import parse_iso
 
 log = get_logger("twitch.vod")
@@ -43,8 +41,6 @@ VIDEO_METADATA_QUERY = """query VideoMetadata($id: ID!) {
     game { name }
   }
 }"""
-
-Progress = Callable[[int, int], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,64 +113,19 @@ async def download_vod(
     until the concat succeeds, so an interrupted download resumes."""
     gql = TwitchGQL(client, cfg)
     token, sig = await get_vod_token(gql, vod_id)
-    master_resp = await client.get(usher_vod_url(cfg, vod_id, token, sig), timeout=30)
-    if master_resp.status_code == 403:
-        raise TwitchGQLError(f"Twitch VOD {vod_id} erişimi reddedildi (sub-only olabilir).")
-    master_resp.raise_for_status()
-    variant = pick_variant(parse_master(master_resp.text, str(master_resp.url)), quality)
-    log.info("vod variant", extra={"vod_id": vod_id, "variant": variant.name})
-    media_resp = await client.get(variant.url, timeout=30)
-    media_resp.raise_for_status()
-    playlist = parse_media(media_resp.text, str(media_resp.url))
-    if not playlist.segments:
-        raise TwitchGQLError(f"Twitch VOD {vod_id} playlist'i boş.")
-
-    parts_dir = out_dir / "parts"
-    parts_dir.mkdir(parents=True, exist_ok=True)
-    sem = asyncio.Semaphore(max(1, cfg.download_concurrency))
-    done = 0
-    total = len(playlist.segments)
-    paths: list[Path] = []
-
-    async def fetch(url: str, dest: Path) -> None:
-        nonlocal done
-        async with sem:
-            if not dest.exists():
-                await _download_file(client, url, dest)
-            done += 1
-            if progress is not None:
-                progress(done, total)
-
-    tasks = []
-    for seg in playlist.segments:
-        dest = parts_dir / f"{seg.seq:06d}.ts"
-        paths.append(dest)
-        tasks.append(fetch(seg.url, dest))
-    await asyncio.gather(*tasks)
-
-    video = out_dir / "video.mp4"
-    await concat_copy(paths, video, ffmpeg)
-    for p in paths:
-        p.unlink(missing_ok=True)
-    parts_dir.rmdir()
-    return video
-
-
-async def _download_file(
-    client: httpx.AsyncClient, url: str, dest: Path, attempts: int = 4
-) -> None:
-    tmp = dest.with_name(dest.name + ".part")
-    for attempt in range(1, attempts + 1):
-        try:
-            async with client.stream("GET", url, timeout=60) as resp:
-                resp.raise_for_status()
-                with tmp.open("wb") as fh:
-                    async for chunk in resp.aiter_bytes(1 << 16):
-                        fh.write(chunk)
-            tmp.replace(dest)
-            return
-        except httpx.HTTPError:
-            tmp.unlink(missing_ok=True)
-            if attempt == attempts:
-                raise
-            await asyncio.sleep(min(2**attempt, 30))
+    try:
+        res = await download_hls_vod(
+            client,
+            usher_vod_url(cfg, vod_id, token, sig),
+            out_dir,
+            quality,
+            concurrency=cfg.download_concurrency,
+            ffmpeg=ffmpeg,
+            progress=progress,
+            forbidden_message=f"Twitch VOD {vod_id} erişimi reddedildi (sub-only olabilir).",
+        )
+    except MediaError as exc:
+        if "erişimi reddedildi" in str(exc) or "boş" in str(exc):
+            raise TwitchGQLError(f"Twitch VOD {vod_id}: {exc}") from exc
+        raise
+    return res.video

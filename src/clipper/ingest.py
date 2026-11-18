@@ -16,11 +16,14 @@ from clipper.config import Config
 from clipper.log import get_logger
 from clipper.media import probe
 from clipper.models import ChatMessage, Segment
+from clipper.platforms.kick import api as kick_api
+from clipper.platforms.kick import vod as kick_vod
 from clipper.platforms.twitch import vod as twitch_vod
 from clipper.platforms.twitch.gql import TwitchGQL
 from clipper.platforms.twitch.vod_chat import iter_vod_comments
 from clipper.platforms.youtube import innertube
 from clipper.platforms.youtube import vod as youtube_vod
+from clipper.recorder.hls_vod import download_hls_vod, first_segment_pdt
 from clipper.sessions import (
     CHAT_FILE,
     PlatformName,
@@ -209,6 +212,93 @@ async def ingest_twitch_vod(
         ffprobe=cfg.paths.ffprobe,
         chat_messages=messages,
     )
+    chat_path.unlink(missing_ok=True)
+    return result
+
+
+def make_kick_api(cfg: Config, client: httpx.AsyncClient) -> kick_api.KickAPI:
+    getter = (
+        kick_api.curl_cffi_getter(cfg.kick)
+        if cfg.kick.http_backend == "curl_cffi"
+        else kick_api.httpx_getter(client, cfg.kick)
+    )
+    return kick_api.KickAPI(getter, cfg.kick)
+
+
+async def ingest_kick_vod(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    client: httpx.AsyncClient,
+    uuid: str,
+    say: Callable[[str], None] = lambda _m: None,
+) -> IngestResult:
+    api = make_kick_api(cfg, client)
+    meta = kick_vod.parse_video(await api.video(uuid))
+    if meta.is_live or meta.duration <= 0:
+        raise IngestError(f"Kick VOD {uuid} hâlâ canlı ya da süresi yok; yayın bitince dene.")
+    say(f"VOD: {meta.display_name} - {meta.title or '(başlıksız)'}")
+    work = _downloads_dir(cfg.paths.data_dir, "kick", uuid)
+
+    # Chat times are aligned to the first video segment's wall-clock time.
+    t0 = await first_segment_pdt(client, meta.source, cfg.recorder.quality_order)
+    t0 = t0 if t0 is not None else meta.start_time
+
+    chat_path = work / CHAT_FILE
+    if not chat_path.is_file():
+        say("Chat indiriliyor (her istek ~5 sn'lik pencere)...")
+        last = [-1]
+
+        def chat_progress(pos: float) -> None:
+            pct = int(pos * 100 / meta.duration) if meta.duration else 100
+            if pct >= last[0] + 10:
+                last[0] = pct
+                say(f"  chat %{pct}")
+
+        messages = [m async for m in kick_vod.iter_vod_chat(api, meta, t0, chat_progress)]
+        chatlog.write_jsonl(chat_path, messages)
+        say(f"Chat: {len(messages)} mesaj")
+    else:
+        messages = list(chatlog.read_jsonl(chat_path))
+
+    video = work / "video.mp4"
+    if not video.is_file():
+        say("Video indiriliyor...")
+        last_v = [-1]
+
+        def progress(done: int, total: int) -> None:
+            pct = done * 100 // total
+            if pct >= last_v[0] + 5:
+                last_v[0] = pct
+                say(f"  segment {done}/{total} (%{pct})")
+
+        res = await download_hls_vod(
+            client,
+            meta.source,
+            work,
+            cfg.recorder.quality_order,
+            concurrency=cfg.kick.download_concurrency,
+            ffmpeg=cfg.paths.ffmpeg,
+            progress=progress,
+            forbidden_message=f"Kick VOD {uuid} erişimi reddedildi (abonelere özel olabilir).",
+        )
+        video = res.video
+    result = await ingest_local(
+        conn,
+        cfg.paths.data_dir,
+        video,
+        None,
+        streamer=meta.display_name,
+        platform="kick",
+        channel=meta.slug or meta.display_name,
+        title=meta.title,
+        move=True,
+        ffprobe=cfg.paths.ffprobe,
+        chat_messages=messages,
+    )
+    if meta.category:
+        conn.execute(
+            "UPDATE sessions SET category = ? WHERE id = ?", (meta.category, result.session_id)
+        )
     chat_path.unlink(missing_ok=True)
     return result
 
