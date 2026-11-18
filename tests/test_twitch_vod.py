@@ -219,3 +219,46 @@ def test_full_twitch_vod_ingest(
 
 async def _no_sleep(_s: float) -> None:
     return None
+
+
+def _gql_with(responses: list[httpx.Response]) -> tuple[TwitchGQL, list[float], httpx.AsyncClient]:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return responses.pop(0)
+
+    slept: list[float] = []
+
+    async def sleep(d: float) -> None:
+        slept.append(d)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return TwitchGQL(client, TwitchConfig(), sleep=sleep), slept, client
+
+
+def test_gql_retries_transient_errors() -> None:
+    ok = httpx.Response(200, json=[{"data": {"x": 1}}])
+    responses = [
+        httpx.Response(200, json=[{"errors": [{"message": "service error"}]}]),
+        httpx.Response(503),
+        ok,
+    ]
+
+    async def go() -> tuple[dict[str, Any], list[float]]:
+        gql, slept, client = _gql_with(responses)
+        async with client:
+            return await gql.run(GQLOperation("X", {}, "query X { a }")), slept
+
+    data, slept = asyncio.run(go())
+    assert data == {"x": 1} and slept == [1.0, 2.0]
+
+
+def test_gql_gives_up_after_retries_and_not_on_permanent_errors() -> None:
+    async def go(responses: list[httpx.Response]) -> list[float]:
+        gql, slept, client = _gql_with(responses)
+        async with client:
+            with pytest.raises(TwitchGQLError):
+                await gql.run(GQLOperation("X", {}, "query X { a }"))
+        return slept
+
+    assert asyncio.run(go([httpx.Response(500)] * 5)) == [1.0, 2.0, 4.0, 8.0]
+    integrity = httpx.Response(200, json=[{"errors": [{"message": "failed integrity check"}]}])
+    assert asyncio.run(go([integrity])) == []

@@ -6,6 +6,8 @@ queries and persisted queries; batching (list bodies) for multiple operations.
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -19,6 +21,15 @@ log = get_logger("twitch.gql")
 
 class TwitchGQLError(Exception):
     """Unofficial API failed or changed shape. Message is user-facing (Turkish)."""
+
+    def __init__(self, message: str, *, transient: bool = False) -> None:
+        super().__init__(message)
+        self.transient = transient
+
+
+# GQL error messages Twitch returns for momentary backend trouble (seen on long VOD chat
+# downloads: "service error"). Retried with backoff; anything else fails at once.
+TRANSIENT_GQL_ERRORS = ("service error", "service unavailable", "timeout", "internal error")
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,15 +53,41 @@ class GQLOperation:
 
 
 class TwitchGQL:
-    def __init__(self, client: httpx.AsyncClient, cfg: TwitchConfig) -> None:
+    def __init__(
+        self,
+        client: httpx.AsyncClient,
+        cfg: TwitchConfig,
+        *,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
         self._client = client
         self._cfg = cfg
+        self._sleep = sleep
 
     async def run(self, op: GQLOperation) -> dict[str, Any]:
         return (await self.batch([op]))[0]
 
     async def batch(self, ops: list[GQLOperation]) -> list[dict[str, Any]]:
-        """Send operations in one request; returns each operation's `data`."""
+        """Send operations in one request; returns each operation's `data`.
+
+        Transient failures (network, HTTP 429/5xx, GQL "service error") are retried
+        `cfg.gql_retries` times with exponential backoff."""
+        attempt = 0
+        while True:
+            try:
+                return await self._batch_once(ops)
+            except TwitchGQLError as exc:
+                if not exc.transient or attempt >= self._cfg.gql_retries:
+                    raise
+                delay = self._cfg.gql_retry_base_seconds * 2**attempt
+                attempt += 1
+                log.warning(
+                    "twitch gql transient error, retrying",
+                    extra={"attempt": attempt, "delay": delay, "error": str(exc)},
+                )
+                await self._sleep(delay)
+
+    async def _batch_once(self, ops: list[GQLOperation]) -> list[dict[str, Any]]:
         payload = [op.body(self._cfg) for op in ops]
         try:
             resp = await self._client.post(
@@ -60,7 +97,11 @@ class TwitchGQL:
                 timeout=30,
             )
         except httpx.HTTPError as exc:
-            raise TwitchGQLError(f"Twitch GQL'e bağlanılamadı: {exc}") from exc
+            raise TwitchGQLError(f"Twitch GQL'e bağlanılamadı: {exc}", transient=True) from exc
+        if resp.status_code == 429 or resp.status_code >= 500:
+            raise TwitchGQLError(
+                f"Twitch GQL geçici hata: HTTP {resp.status_code}.", transient=True
+            )
         if resp.status_code != 200:
             raise TwitchGQLError(
                 f"Twitch GQL HTTP {resp.status_code}. Client-ID veya uç nokta değişmiş olabilir"
@@ -90,7 +131,10 @@ class TwitchGQL:
                         " Twitch bu sorgu için 'integrity' istiyor;"
                         " anonim erişim kapanmış olabilir."
                     )
-                raise TwitchGQLError(f"Twitch GQL '{op.name}' hatası: {msg}.{hint}")
+                transient = any(t in msg.lower() for t in TRANSIENT_GQL_ERRORS)
+                raise TwitchGQLError(
+                    f"Twitch GQL '{op.name}' hatası: {msg}.{hint}", transient=transient
+                )
             data = res.get("data") if isinstance(res, dict) else None
             if not isinstance(data, dict):
                 raise TwitchGQLError(f"Twitch GQL '{op.name}' veri döndürmedi.")
