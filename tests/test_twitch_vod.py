@@ -165,6 +165,32 @@ def test_vod_comments_same_second_page_steps_forward() -> None:
     assert calls == [0, 1] and len(msgs) == 4
 
 
+def test_vod_comments_stop_at_vod_length() -> None:
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        off = json.loads(request.content)[0]["variables"]["contentOffsetSeconds"]
+        calls.append(off)
+        if off > 100:  # what Twitch does past lengthSeconds
+            return httpx.Response(200, json=[{"errors": [{"message": "service error"}]}])
+        page = {
+            "edges": [
+                _comment("a", 50.0, "1", [{"text": "a"}]),
+                _comment("b", 103.0, "2", [{"text": "b"}]),
+            ],
+            "pageInfo": {"hasNextPage": True},
+        }
+        return httpx.Response(200, json=[{"data": {"video": {"comments": page}}}])
+
+    async def go() -> list[Any]:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            gql = TwitchGQL(client, TwitchConfig())
+            return [m async for m in iter_vod_comments(gql, VOD_ID, length_seconds=100)]
+
+    msgs = asyncio.run(go())
+    assert calls == [0] and [m.ts for m in msgs] == [50.0, 103.0]
+
+
 def test_gql_errors_are_clear() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=[{"errors": [{"message": "PersistedQueryNotFound"}]}])

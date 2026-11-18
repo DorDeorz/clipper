@@ -28,13 +28,20 @@ def comment_to_message(node: dict[str, Any]) -> ChatMessage:
 
 
 async def iter_vod_comments(
-    gql: TwitchGQL, vod_id: str, progress: Callable[[float], None] | None = None
+    gql: TwitchGQL,
+    vod_id: str,
+    progress: Callable[[float], None] | None = None,
+    *,
+    length_seconds: float | None = None,
 ) -> AsyncIterator[ChatMessage]:
     """Yield comments (ts = seconds from VOD start) by paging on `contentOffsetSeconds`.
 
     Cursor paging is no longer served to anonymous clients ("failed integrity check",
     2026-11), so each next page starts at the last offset seen; duplicates are dropped
     by comment id. If a whole page shares one second, we step one second forward.
+
+    Comments can run a few seconds past the VOD's `lengthSeconds`, but Twitch answers any
+    `contentOffsetSeconds` beyond the length with "service error"; paging stops there.
     """
     offset = 0.0
     seen: set[str] = set()
@@ -68,4 +75,6 @@ async def iter_vod_comments(
             return
         next_offset = float(int(max_offset))
         offset = next_offset if next_offset > int(offset) else float(int(offset) + 1)
+        if length_seconds is not None and offset >= length_seconds:
+            return
     raise TwitchGQLError("Twitch chat sayfalama sınırı aşıldı.")
