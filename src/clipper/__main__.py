@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import sqlite3
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -12,6 +13,7 @@ import httpx
 
 from clipper import __version__, chatlog, db, ingest
 from clipper.config import Config, ConfigError, load_config, load_secrets
+from clipper.detect.pipeline import DetectError
 from clipper.log import get_logger, setup_logging
 from clipper.media import MediaError
 from clipper.platforms.twitch.gql import TwitchGQLError
@@ -61,6 +63,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="videonun başladığı an (unix sn veya ISO-8601); mutlak zamanlı chat'i hizalamak için",
     )
     p_vod.add_argument("--title", help="session başlığı")
+    p_vod.add_argument(
+        "--no-detect", action="store_true", help="session oluşturduktan sonra dedektörü çalıştırma"
+    )
+
+    p_det = sub.add_parser("detect", help="session üzerinde dedektörü çalıştır")
+    p_det.add_argument("session_id", type=int)
+    p_det.add_argument("--force", action="store_true", help="mevcut adayları silip yeniden")
+    p_det.add_argument("--no-audio", action="store_true", help="ses sinyalini kullanma")
+
+    p_rep = sub.add_parser("report", help="session için HTML sinyal raporu üret")
+    p_rep.add_argument("session_id", type=int)
+    p_rep.add_argument("--out", type=Path, help="çıktı dosyası (varsayılan: session klasörü)")
 
     p_chat = sub.add_parser("chat-import", help="chat dosyasını ortak jsonl biçimine çevir")
     p_chat.add_argument("input", type=Path, help="TwitchDownloader .json veya .jsonl")
@@ -108,12 +122,27 @@ async def _run_vod(args: argparse.Namespace, cfg: Config) -> int:
                     result = await ingest.ingest_youtube_vod(
                         conn, cfg, client, args.youtube, say=_say
                     )
+        print(
+            f"Session #{result.session_id} hazır: {fmt_duration(result.duration)} video,"
+            f" {result.chat_count} chat mesajı ({result.session_dir})"
+        )
+        if not args.no_detect:
+            return await _detect_and_report(conn, cfg, result.session_id, False, True)
     finally:
         conn.close()
-    print(
-        f"Session #{result.session_id} hazır: {fmt_duration(result.duration)} video,"
-        f" {result.chat_count} chat mesajı ({result.session_dir})"
-    )
+    return 0
+
+
+async def _detect_and_report(
+    conn: sqlite3.Connection, cfg: Config, session_id: int, force: bool, with_audio: bool
+) -> int:
+    from clipper.detect.pipeline import analyze_session
+    from clipper.detect.report import write_report
+
+    res = await analyze_session(conn, cfg, session_id, force=force, with_audio=with_audio)
+    path = write_report(conn, session_id, cfg.detector.threshold)
+    print(f"Dedektör: {len(res.candidate_ids)} aday ({fmt_duration(res.seconds)} tarandı)")
+    print(f"Rapor: {path}")
     return 0
 
 
@@ -181,6 +210,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"{n} mesaj yazıldı: {args.output}")
         return 0
 
+    if args.command in ("detect", "report"):
+        from clipper.detect.report import write_report
+
+        conn = db.open_db(cfg.db_path)
+        try:
+            if args.command == "detect":
+                return asyncio.run(
+                    _detect_and_report(conn, cfg, args.session_id, args.force, not args.no_audio)
+                )
+            print(f"Rapor: {write_report(conn, args.session_id, cfg.detector.threshold, args.out)}")
+            return 0
+        except (DetectError, KeyError, chatlog.ChatFormatError) as exc:
+            msg = f"session #{exc.args[0]} bulunamadı" if isinstance(exc, KeyError) else exc
+            print(f"Hata: {msg}", file=sys.stderr)
+            return 1
+        finally:
+            conn.close()
+
     if args.command == "vod":
         try:
             return asyncio.run(_run_vod(args, cfg))
@@ -192,6 +239,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             YouTubeParseError,
             YtDlpError,
             httpx.HTTPError,
+            DetectError,
         ) as exc:
             log.error("vod failed", extra={"error": str(exc)})
             print(f"Hata: {exc}", file=sys.stderr)
