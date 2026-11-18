@@ -1,0 +1,40 @@
+# clipper config. Copy to config.yaml and edit. Relative paths are resolved
+# against this file's directory.
+paths: { data_dir: ./data, ffmpeg: ffmpeg, ffprobe: ffprobe }
+panel: { host: 127.0.0.1, port: 8765 }
+recorder:
+  buffer_minutes: 15
+  quality: "1080p60,1080p,936p60,720p60,best"
+detector:
+  bin_seconds: 1
+  burst_window: 5
+  baseline_halflife: 300
+  warmup_seconds: 180
+  threshold: 3.0
+  min_rate: 0.5
+  min_ratio: 1.6
+  cooldown: 45
+  lag_seconds: 20
+  pre_roll: 40
+  post_roll: 25
+  weights: { rate: 0.40, uniq: 0.25, emote: 0.20, audio: 0.15 }
+transcribe: { model: large-v3, device: auto, compute_type: auto, language: tr, beam_size: 5 }
+llm:
+  prefilter_model: claude-haiku-5-5
+  judge_model: claude-sonnet-5-5     # premium: claude-opus-5-5
+  max_candidates_per_hour: 12
+  min_keep_score: 65
+  monthly_budget_usd: 30
+render:
+  width: 1080
+  height: 1920
+  fps: 30
+  encoder: auto            # auto | h264_nvenc | libx264
+  loudness_lufs: -14
+  min_len: 12
+  max_len: 59
+publish:
+  min_gap_minutes: { youtube: 90, instagram: 120, x: 60, tiktok: 120 }
+  daily_cap: { youtube: 8, instagram: 6, x: 10, tiktok: 6 }
+  auto_publish_min_score: 85
+streamers: []
