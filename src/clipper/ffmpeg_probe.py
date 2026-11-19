@@ -8,7 +8,7 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from clipper.util.proc import no_window
+from clipper.util.proc import no_window, stop_process
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,10 +25,8 @@ async def run_tool(*args: str, timeout: float = 20.0) -> ToolResult:
     )
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except TimeoutError:
-        proc.kill()
-        await proc.wait()
-        raise
+    finally:
+        await stop_process(proc)  # timeout or cancel: no orphan ffmpeg (audit B-06)
     return ToolResult(
         returncode=proc.returncode if proc.returncode is not None else -1,
         stdout=out.decode("utf-8", "replace"),

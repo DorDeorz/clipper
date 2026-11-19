@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from clipper.util.proc import no_window
+from clipper.util.proc import no_window, stop_process
 
 SAMPLE_RATE = 16_000
 SILENCE_DB = -90.0
@@ -54,19 +54,22 @@ async def segment_db(path: Path, pdt_start: float, ffmpeg: str = "ffmpeg") -> di
     buf = b""
     sec = math.floor(pdt_start)
     want = first
-    while True:
-        data = await proc.stdout.read(65536)
-        if not data:
-            break
-        buf += data
-        while len(buf) >= want:
-            out[sec] = rms_dbfs(np.frombuffer(buf[:want], dtype="<i2"))
-            buf = buf[want:]
-            sec += 1
-            want = chunk_bytes
+    try:
+        while True:
+            data = await proc.stdout.read(65536)
+            if not data:
+                break
+            buf += data
+            while len(buf) >= want:
+                out[sec] = rms_dbfs(np.frombuffer(buf[:want], dtype="<i2"))
+                buf = buf[want:]
+                sec += 1
+                want = chunk_bytes
+        await proc.wait()
+    finally:
+        await stop_process(proc)  # cancelled mid-read: no orphan ffmpeg (audit B-06)
     if len(buf) >= 2 * SAMPLE_RATE // 10:  # keep a trailing partial second if >= 0.1 s
         out[sec] = rms_dbfs(np.frombuffer(buf[: len(buf) // 2 * 2], dtype="<i2"))
-    await proc.wait()
     return out
 
 
