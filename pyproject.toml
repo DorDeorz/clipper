@@ -35,9 +35,10 @@ packages = ["src/clipper"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-m 'not online'"
+addopts = "-m 'not online and not claude_live'"
 markers = [
     "online: tests that need real network access (run with -m online)",
+    "claude_live: PAID real Anthropic API smoke tests (run with -m claude_live -s)",
     "slow: long-running tests (skip with -m 'not slow')",
     "integration: multi-component tests against local fake servers",
     "security: security checks (TESTPLAN 8.2)",
