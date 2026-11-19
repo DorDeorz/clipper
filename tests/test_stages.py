@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -165,6 +166,27 @@ def test_hourly_cap(session: int, tmp_path: Path, conn: sqlite3.Connection) -> N
     ]
     assert reasons == ["saatlik aday sınırı doldu"] * 2
     assert sum(b["model"] == "claude-sonnet-5-5" for b in fake.requests) == 1
+
+
+def test_budget_stop_rejects_without_calls(
+    session: int, tmp_path: Path, conn: sqlite3.Connection
+) -> None:
+    cfg = _cfg(tmp_path, daily_budget_usd=0.01)
+    asyncio.run(analyze_session(conn, cfg, session, with_audio=False))
+    conn.execute(
+        "INSERT INTO llm_usage (ts, model, purpose, input_tokens, output_tokens, cache_read, usd)"
+        " VALUES (?, 'claude-sonnet-5-5', 'judge', 0, 0, 0, 0.02)",
+        (time.time(),),
+    )
+    fake = FakeAnthropic([_llm_reply] * 6)
+    stats = _run(conn, cfg, fake, FakeWhisper())
+    assert fake.requests == []
+    assert stats.dead == 0
+    statuses = {r[0] for r in conn.execute("SELECT status FROM candidates").fetchall()}
+    assert statuses == {"rejected"}
+    reasons = {json.loads(r[0])["prefilter"]["reason"] for r in conn.execute(
+        "SELECT llm_json FROM clips").fetchall()}  # fmt: skip
+    assert all("Günlük LLM bütçesi doldu" in r for r in reasons)
 
 
 def test_no_api_key_leaves_llm_jobs(session: int, tmp_path: Path, conn: sqlite3.Connection) -> None:

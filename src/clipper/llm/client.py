@@ -1,5 +1,13 @@
 """Claude client: structured JSON output, prompt caching, one repair retry, cost tracking
-in `llm_usage`, and a monthly budget guard."""
+in `llm_usage`, and spending limits.
+
+Spending guards (all checked before every API call):
+- `llm.monthly_budget_usd` and `llm.daily_budget_usd` are hard stops: once reached, no
+  request goes out (`LLMBudgetExceeded`) until the next month / day (UTC).
+- At `llm.downgrade_at` x monthly budget the judge falls back to the cheaper prefilter model.
+- Failures that already cost money (invalid output twice, max_tokens, bad request) are not
+  retried by the job queue (`retry = False`); only connection errors are.
+"""
 
 from __future__ import annotations
 
@@ -53,7 +61,20 @@ FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
 
 class LLMError(Exception):
-    """User-facing (Turkish)."""
+    """User-facing (Turkish). Not retried by the job queue: the request may already have
+    been billed, and repeating it would usually fail the same way."""
+
+    retry = False
+
+
+class LLMTransient(LLMError):
+    """Network trouble before Claude answered (nothing billed): safe to retry later."""
+
+    retry = True
+
+
+class LLMBudgetExceeded(LLMError):
+    """A spending limit is reached; no request was sent."""
 
 
 class LLMCacheMiss(Exception):
@@ -121,13 +142,21 @@ def cost_usd(
     ) / 1_000_000
 
 
-def month_spend(conn: sqlite3.Connection, now: float | None = None) -> float:
-    dt = datetime.fromtimestamp(now if now is not None else time.time(), UTC)
-    start = datetime(dt.year, dt.month, 1, tzinfo=UTC).timestamp()
+def _spend_since(conn: sqlite3.Connection, start: float) -> float:
     row = conn.execute(
         "SELECT COALESCE(SUM(usd), 0) FROM llm_usage WHERE ts >= ?", (start,)
     ).fetchone()
     return float(row[0])
+
+
+def month_spend(conn: sqlite3.Connection, now: float | None = None) -> float:
+    dt = datetime.fromtimestamp(now if now is not None else time.time(), UTC)
+    return _spend_since(conn, datetime(dt.year, dt.month, 1, tzinfo=UTC).timestamp())
+
+
+def day_spend(conn: sqlite3.Connection, now: float | None = None) -> float:
+    dt = datetime.fromtimestamp(now if now is not None else time.time(), UTC)
+    return _spend_since(conn, datetime(dt.year, dt.month, dt.day, tzinfo=UTC).timestamp())
 
 
 class LLMClient:
@@ -139,14 +168,34 @@ class LLMClient:
         self.client = client
 
     def over_budget(self) -> bool:
-        return month_spend(self.conn) >= self.cfg.monthly_budget_usd
+        """Past the downgrade point of the monthly budget (judge uses the cheap model)."""
+        return month_spend(self.conn) >= self.cfg.monthly_budget_usd * self.cfg.downgrade_at
+
+    def check_budget(self) -> None:
+        """Raise before a request if a hard spending limit is reached."""
+        month = month_spend(self.conn)
+        if month >= self.cfg.monthly_budget_usd:
+            raise LLMBudgetExceeded(
+                f"Aylık LLM bütçesi doldu (${month:.2f} / ${self.cfg.monthly_budget_usd:.2f})."
+                " Yeni Claude isteği gönderilmiyor; config'te llm.monthly_budget_usd ile"
+                " değiştirilebilir."
+            )
+        day = day_spend(self.conn)
+        if day >= self.cfg.daily_budget_usd:
+            raise LLMBudgetExceeded(
+                f"Günlük LLM bütçesi doldu (${day:.2f} / ${self.cfg.daily_budget_usd:.2f})."
+                " Yarın (UTC) devam edilecek; config'te llm.daily_budget_usd ile"
+                " değiştirilebilir."
+            )
 
     def judge_model(self) -> tuple[str, bool]:
-        """Judge model, downgraded to the prefilter model when the monthly budget is spent.
+        """Judge model, downgraded to the prefilter model near the monthly budget.
         Returns (model, downgraded)."""
         if self.over_budget():
             log.warning(
-                "aylık LLM bütçesi aşıldı; judge %s modeline düşürüldü", self.cfg.prefilter_model
+                "aylık LLM bütçesinin %%%d'i harcandı; judge %s modeline düşürüldü",
+                round(self.cfg.downgrade_at * 100),
+                self.cfg.prefilter_model,
             )
             return self.cfg.prefilter_model, True
         return self.cfg.judge_model, False
@@ -225,6 +274,8 @@ class LLMClient:
                     f"LLM replay: önbellekte yok ({purpose}, {cache_file.name}). Önce"
                     " llm.cache_mode=record ile koş."
                 )
+        if resp is None:
+            self.check_budget()
         try:
             if resp is not None:
                 pass
@@ -241,7 +292,12 @@ class LLMClient:
         except anthropic.BadRequestError as exc:
             raise LLMError(f"Claude isteği reddetti: {exc.message}") from exc
         except anthropic.APIConnectionError as exc:
-            raise LLMError("Claude API'ye bağlanılamadı.") from exc
+            raise LLMTransient("Claude API'ye bağlanılamadı.") from exc
+        except anthropic.APIStatusError as exc:
+            if exc.status_code == 429 or exc.status_code >= 500:
+                # The SDK already retried these (max_retries); the job queue tries later.
+                raise LLMTransient(f"Claude API şu an yoğun ({exc.status_code}).") from exc
+            raise LLMError(f"Claude API hatası ({exc.status_code}): {exc.message}") from exc
 
         if cache_file is not None and not cache_file.is_file():
             atomic_write_text(

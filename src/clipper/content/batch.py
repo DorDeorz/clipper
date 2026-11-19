@@ -11,7 +11,13 @@ from typing import Any
 
 from clipper import chatlog, jobs
 from clipper.config import Config
-from clipper.content.scanner import ContentAccumulator, ContentScanner, ScanOutcome, record_scan
+from clipper.content.scanner import (
+    BUDGET_REASON,
+    ContentAccumulator,
+    ContentScanner,
+    ScanOutcome,
+    record_scan,
+)
 from clipper.content.transcript import TRANSCRIPT_FILE, from_whisper, read_lines
 from clipper.detect.merge import Draft
 from clipper.detect.pipeline import insert_candidate, top_messages
@@ -149,6 +155,9 @@ async def scan_session(
         record_scan(conn, session_id, o)
         usd += o.usd
         drafts += acc.feed(o)
+        if o.reason == BUDGET_REASON:
+            say("  LLM bütçesi doldu; içerik taraması burada durduruldu.")
+            break
         if i % 20 == 0:
             say(f"  içerik taraması {i}/{len(windows)} pencere (${usd:.3f})")
     drafts += acc.flush()
