@@ -143,6 +143,10 @@ def strict_schema(model: type[BaseModel]) -> dict[str, Any]:
             if "$ref" in node:
                 return walk(copy.deepcopy(defs[node["$ref"].rsplit("/", 1)[-1]]))
             out = {k: walk(v) for k, v in node.items() if k not in _DROP}
+            if isinstance(node.get("properties"), dict):
+                # Keys of `properties` are field names, not keywords: a field may be
+                # called "title" or "description" (JudgeDecision, YouTubeText).
+                out["properties"] = {k: walk(v) for k, v in node["properties"].items()}
             if out.get("type") == "object" and "properties" in out:
                 out["additionalProperties"] = False
                 out["required"] = list(out["properties"])

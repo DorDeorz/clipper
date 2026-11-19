@@ -4,6 +4,7 @@ import asyncio
 import json
 import sqlite3
 import time
+from typing import Any
 
 import pytest
 
@@ -16,7 +17,13 @@ from clipper.llm.prompts import (
     judge_system,
     snap_to_words,
 )
-from clipper.llm.schemas import JudgeDecision, PrefilterDecision, strict_schema
+from clipper.llm.schemas import (
+    ContentScanDecision,
+    FacecamDecision,
+    JudgeDecision,
+    PrefilterDecision,
+    strict_schema,
+)
 from clipper.models import ChatMessage
 from tests.llm_mock import FakeAnthropic, judge_payload, message
 
@@ -152,6 +159,49 @@ def test_strict_schema_is_self_contained() -> None:
     assert "$ref" not in text and "$defs" not in text
     assert schema["properties"]["caption_fixes"]["items"]["required"] == ["from", "to"]
     assert schema["properties"]["texts"]["additionalProperties"] is False
+
+
+def _assert_schema_covers(schema: dict[str, Any], value: Any, path: str = "$") -> None:
+    """Every key of a valid output must be allowed (and required) by the strict schema;
+    with `additionalProperties: false` the API cannot produce a key the schema lacks."""
+    if isinstance(value, dict):
+        props = schema.get("properties", {})
+        assert sorted(schema.get("required", [])) == sorted(value), path
+        for key, sub in value.items():
+            assert key in props, f"{path}.{key} missing from schema"
+            _assert_schema_covers(props[key], sub, f"{path}.{key}")
+    elif isinstance(value, list):
+        for i, item in enumerate(value):
+            _assert_schema_covers(schema["items"], item, f"{path}[{i}]")
+
+
+@pytest.mark.parametrize(
+    ("model", "payload"),
+    [
+        (JudgeDecision, judge_payload()),
+        (PrefilterDecision, {"keep": True, "rough_score": 50, "reason": "r"}),
+        (
+            ContentScanDecision,
+            {"score": 70, "kind": "story", "reason": "r", "best_start": 1.0, "best_end": 9.0},
+        ),
+        (
+            FacecamDecision,
+            {
+                "found": True,
+                "x": 0.1,
+                "y": 0.1,
+                "w": 0.2,
+                "h": 0.2,
+                "confidence": 80,
+                "reason": "r",
+            },
+        ),
+    ],
+)
+def test_strict_schema_keeps_every_model_field(model: type[Any], payload: dict[str, Any]) -> None:
+    # Audit B-01: fields named "title"/"description" were dropped as JSON Schema keywords.
+    model.model_validate(payload)  # the payload is a valid answer
+    _assert_schema_covers(strict_schema(model), payload)
 
 
 def test_judge_system_formats_lengths() -> None:
