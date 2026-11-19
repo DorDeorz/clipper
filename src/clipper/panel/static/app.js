@@ -35,13 +35,29 @@ function h(tag, attrs, ...kids) {
   return el;
 }
 
-async function call(method, url, body) {
-  const opts = { method, headers: {} };
-  if (body !== undefined) {
-    opts.headers["Content-Type"] = "application/json";
-    opts.body = JSON.stringify(body);
+// State-changing requests carry the panel's CSRF token (audit B-02). The token changes
+// when the app restarts, so a 403 fetches it again and retries once.
+let csrfToken = null;
+async function csrf(refresh = false) {
+  if (csrfToken === null || refresh) {
+    const r = await fetch("/api/csrf");
+    csrfToken = r.ok ? (await r.json()).token : "";
   }
-  const res = await fetch(url, opts);
+  return csrfToken;
+}
+
+async function call(method, url, body) {
+  const send = async (refresh) => {
+    const opts = { method, headers: {} };
+    if (method !== "GET") opts.headers["X-CSRF-Token"] = await csrf(refresh);
+    if (body !== undefined) {
+      opts.headers["Content-Type"] = "application/json";
+      opts.body = JSON.stringify(body);
+    }
+    return fetch(url, opts);
+  };
+  let res = await send(false);
+  if (res.status === 403 && method !== "GET") res = await send(true);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || data.detail || `HTTP ${res.status}`);
   return data;

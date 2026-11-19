@@ -19,6 +19,7 @@ from clipper.panel.app import PanelDeps, create_app
 from clipper.panel.vodjobs import VodError, VodTask, VodTasks, detect_source, parse_ref
 from clipper.runner import already_running
 from clipper.util.crypto import generate_key
+from tests.panel_client import panel_client
 
 ANTH = "sk-ant-test-0123456789"
 
@@ -54,7 +55,7 @@ def _client(tmp_path: Path, **kw: Any) -> tuple[TestClient, PanelDeps]:
     conn = db.open_db(cfg.db_path, check_same_thread=False)
     env = tmp_path / ".env"
     deps = PanelDeps(conn, cfg, load_secrets(env), env_path=env, **kw)
-    return TestClient(create_app(deps)), deps
+    return panel_client(create_app(deps)), deps
 
 
 def test_setup_endpoints(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

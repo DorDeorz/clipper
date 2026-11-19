@@ -88,6 +88,60 @@ def _auth_ok(header: str | None, password: str) -> bool:
     return _secrets.compare_digest(given.encode(), password.encode())
 
 
+UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+CSRF_HEADER = "x-csrf-token"
+
+
+def _host_name(host_header: str) -> str:
+    """Host header -> bare host name (no port, no IPv6 brackets), lowercased."""
+    h = host_header.strip().lower()
+    if h.startswith("["):
+        return h[1 : h.find("]")] if "]" in h else h
+    return h.rsplit(":", 1)[0] if h.count(":") == 1 else h
+
+
+def _origin_host(origin: str) -> str | None:
+    """`scheme://host[:port]` of an Origin/Referer header -> `host[:port]`, lowercased."""
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(origin.strip())
+    except ValueError:
+        return None
+    return parts.netloc.lower() or None
+
+
+def request_guard_error(
+    method: str, headers: dict[str, str], *, loopback: bool, token: str
+) -> tuple[int, str] | None:
+    """Audit B-02. Returns (status, Turkish message) when the request must be refused.
+
+    - Bound to loopback: the Host must be a loopback name (DNS rebinding sends the
+      attacker's host name), for every request.
+    - State-changing requests need the per-process CSRF token in `X-CSRF-Token` (a
+      custom header also forces a CORS preflight, which the panel never grants), a
+      same-origin `Origin`/`Referer` when the browser sends one, and a JSON body.
+    """
+    host = headers.get("host", "")
+    if loopback and not is_loopback(_host_name(host)):
+        return 403, "panel sadece yerel adresten (127.0.0.1 / localhost) açılabilir"
+    if method not in UNSAFE_METHODS:
+        return None
+    source = headers.get("origin") or headers.get("referer")
+    if source and _origin_host(source) != host.strip().lower():
+        return 403, "başka bir siteden gelen istek reddedildi"
+    given = headers.get(CSRF_HEADER, "")
+    if not given or not _secrets.compare_digest(given.encode(), token.encode()):
+        return 403, "CSRF anahtarı eksik ya da geçersiz; paneli yenile"
+    has_body = headers.get("content-length", "0") not in ("", "0") or (
+        "transfer-encoding" in headers
+    )
+    ctype = headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if has_body and ctype != "application/json":
+        return 415, "istek gövdesi application/json olmalı"
+    return None
+
+
 def safe_media_path(data_dir: Path, rel: str) -> Path:
     """Resolve `rel` inside `data_dir`; anything escaping it (.., absolute, symlink out)
     is a 404, never a file."""
@@ -146,6 +200,35 @@ def create_app(deps: PanelDeps) -> FastAPI:
                     headers={"WWW-Authenticate": 'Basic realm="clipper"'},
                 )
             return await call_next(request)
+
+    # Registered after basic auth, so it runs first (outermost middleware).
+    app.state.csrf_token = _secrets.token_urlsafe(32)
+    loopback = is_loopback(cfg.panel.host)
+
+    @app.middleware("http")
+    async def _request_guard(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        refused = request_guard_error(
+            request.method,
+            {k.lower(): v for k, v in request.headers.items()},
+            loopback=loopback,
+            token=app.state.csrf_token,
+        )
+        if refused is not None:
+            status, message = refused
+            log.warning(
+                "panel request refused",
+                extra={"method": request.method, "path": request.url.path, "status": status},
+            )
+            return JSONResponse({"error": message}, status_code=status)
+        return await call_next(request)
+
+    @app.get("/api/csrf", include_in_schema=False)
+    async def csrf_token() -> dict[str, str]:
+        # Readable only same-origin: no CORS headers, and the Host check above stops
+        # DNS rebinding on loopback (an exposed panel is behind its password).
+        return {"token": app.state.csrf_token}
 
     # ---- static / media -----------------------------------------------------------------
 
