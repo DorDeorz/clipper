@@ -11,7 +11,7 @@ from pathlib import Path
 from clipper.config import RenderConfig
 from clipper.ffmpeg_probe import nvenc_works, run_tool, which
 from clipper.log import get_logger
-from clipper.util.proc import no_window
+from clipper.util.proc import no_window, stop_process
 
 log = get_logger("render")
 _ENCODER_CACHE: dict[str, str] = {}
@@ -103,9 +103,9 @@ async def run_render(
         )
         await proc.wait()
     except TimeoutError:
-        proc.kill()
-        await proc.wait()
         raise RenderError("render zaman aşımına uğradı") from None
+    finally:
+        await stop_process(proc)  # timeout or cancel: no orphan ffmpeg (audit B-06)
     if proc.returncode != 0:
         raise RenderError(f"render başarısız: {err.decode('utf-8', 'replace').strip()[:600]}")
 
