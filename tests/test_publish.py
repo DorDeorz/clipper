@@ -15,7 +15,6 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 from clipper import db, jobs
@@ -31,6 +30,7 @@ from clipper.publish.wiring import PublishKit
 from clipper.publish.x import XPublisher
 from clipper.publish.youtube import YouTubePublisher
 from clipper.util.crypto import SecretBox, generate_key
+from tests.panel_client import panel_client
 
 JUDGE = {
     "keep": True, "score": 90, "reason": "çok komik", "start": 2.0, "end": 30.0,
@@ -729,7 +729,7 @@ def test_panel_publishing_endpoints(world: tuple[sqlite3.Connection, Config]) ->
     box = SecretBox(secrets.clipper_secret_key.get_secret_value())
     oauth = OAuthManager(conn, cfg, box, providers(cfg, secrets), client)
     kit = PublishKit(oauth, {"youtube": FakePublisher([])})  # type: ignore[dict-item]
-    app = TestClient(create_app(PanelDeps(conn, cfg, secrets, publish=kit)))
+    app = panel_client(create_app(PanelDeps(conn, cfg, secrets, publish=kit)))
 
     acc = app.get("/api/accounts").json()
     assert acc["secret_key"] is True and all(p["configured"] for p in acc["platforms"])

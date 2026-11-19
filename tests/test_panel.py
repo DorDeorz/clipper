@@ -16,6 +16,7 @@ from pydantic import SecretStr
 from clipper import db
 from clipper.config import Config, PanelConfig, PathsConfig, Secrets
 from clipper.panel.app import PanelConfigError, PanelDeps, check_bind, create_app, is_loopback
+from tests.panel_client import panel_client
 
 JUDGE = {
     "keep": True, "score": 80, "reason": "çok komik", "start": 2.0, "end": 30.0,
@@ -92,7 +93,7 @@ def world(tmp_path: Path) -> Iterator[tuple[sqlite3.Connection, Config]]:
 @pytest.fixture
 def client(world: tuple[sqlite3.Connection, Config]) -> TestClient:
     conn, cfg = world
-    return TestClient(create_app(PanelDeps(conn, cfg, Secrets())))
+    return panel_client(create_app(PanelDeps(conn, cfg, Secrets())))
 
 
 def test_index_and_static(client: TestClient) -> None:
@@ -163,7 +164,10 @@ def test_edit_validation(client: TestClient) -> None:
     assert client.put("/api/clips/1", json={"title": ""}).status_code == 400
     r = client.put("/api/clips/99", json={"title": "x"})
     assert r.status_code == 404 and r.json()["error"] == "klip bulunamadı"
-    assert client.put("/api/clips/1", content=b"[1]").status_code == 400
+    not_object = client.put(
+        "/api/clips/1", content=b"[1]", headers={"Content-Type": "application/json"}
+    )
+    assert not_object.status_code == 400
 
 
 def test_reject_with_reason(client: TestClient, world: Any) -> None:
@@ -231,7 +235,7 @@ def test_signals_sessions_costs_logs(client: TestClient) -> None:
 def test_basic_auth_when_password(world: Any) -> None:
     conn, cfg = world
     app = create_app(PanelDeps(conn, cfg, Secrets(panel_password=SecretStr("gizli"))))
-    c = TestClient(app)
+    c = panel_client(app)
     assert c.get("/api/status").status_code == 401
     assert c.get("/media/sessions/1/clips/1/final.mp4").status_code == 401
     good = base64.b64encode(b"panel:gizli").decode()

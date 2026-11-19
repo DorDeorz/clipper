@@ -12,7 +12,6 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from fastapi.testclient import TestClient
 
 from clipper import db, settings
 from clipper.__main__ import main
@@ -24,6 +23,7 @@ from clipper.panel.app import PanelDeps, create_app
 from clipper.retention import cleanup
 from clipper.stages import Stages
 from clipper.util.timeutil import to_iso
+from tests.panel_client import panel_client
 
 # ---- model ------------------------------------------------------------------------------
 
@@ -177,7 +177,7 @@ def test_apply_undo_and_gate(learn_world: tuple[sqlite3.Connection, Config]) -> 
 
 def test_panel_learn_endpoints(learn_world: tuple[sqlite3.Connection, Config]) -> None:
     conn, cfg = learn_world
-    app = TestClient(create_app(PanelDeps(conn, cfg, Secrets())))
+    app = panel_client(create_app(PanelDeps(conn, cfg, Secrets())))
     d = app.get("/api/learn").json()
     assert d["versions"] == [] and d["decisions"] == 240
     assert app.post("/api/learn/1/apply").status_code == 404
