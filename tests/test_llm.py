@@ -192,3 +192,61 @@ def test_chat_timeline_relative_seconds() -> None:
     out = chat_timeline(msgs, 100, 110)
     assert out.splitlines()[0] == "0: 2 | KEKW"
     assert chat_timeline([], 0, 10) == "(chat yok)"
+
+
+def _spend(conn: sqlite3.Connection, usd: float, ts: float | None = None) -> None:
+    conn.execute(
+        "INSERT INTO llm_usage (ts, model, purpose, input_tokens, output_tokens, cache_read, usd)"
+        " VALUES (?, 'claude-sonnet-5-5', 'judge', 0, 0, 0, ?)",
+        (ts if ts is not None else time.time(), usd),
+    )
+
+
+@pytest.mark.parametrize(
+    ("limits", "spent", "msg"),
+    [
+        ({"monthly_budget_usd": 1.0}, 1.0, "Aylık"),
+        ({"daily_budget_usd": 0.5}, 0.6, "Günlük"),
+    ],
+)
+def test_hard_budget_sends_nothing(
+    conn: sqlite3.Connection, limits: dict[str, float], spent: float, msg: str
+) -> None:
+    from clipper.llm.client import LLMBudgetExceeded
+
+    fake = FakeAnthropic([lambda b: json.dumps({"keep": True, "rough_score": 1, "reason": ""})])
+    _spend(conn, spent)
+    with pytest.raises(LLMBudgetExceeded, match=msg) as info:
+        _prefilter(_client(conn, fake, **limits))
+    assert fake.requests == []  # no request left the machine
+    assert info.value.retry is False
+
+
+def test_daily_budget_resets_next_day(conn: sqlite3.Connection) -> None:
+    fake = FakeAnthropic([lambda b: json.dumps({"keep": True, "rough_score": 1, "reason": ""})])
+    _spend(conn, 5.0, ts=time.time() - 2 * 86400)  # same month maybe, but not today
+    llm = _client(conn, fake, daily_budget_usd=1.0, monthly_budget_usd=1000)
+    assert _prefilter(llm).value.keep
+
+
+def test_billed_failures_are_not_requeued(conn: sqlite3.Connection) -> None:
+    """Invalid output twice is billed twice; the job queue must not repeat it 4 more times."""
+    fake = FakeAnthropic([lambda b: "not json", lambda b: "still not json"])
+    with pytest.raises(LLMError) as info:
+        _prefilter(_client(conn, fake))
+    assert len(fake.requests) == 2
+    assert info.value.retry is False
+
+    from clipper.worker import _retryable
+
+    assert not _retryable(info.value)
+
+
+def test_server_overload_is_retryable(conn: sqlite3.Connection) -> None:
+    from clipper.llm.client import LLMTransient
+
+    fake = FakeAnthropic()  # every request -> HTTP 500 (SDK retries, then gives up)
+    with pytest.raises(LLMTransient) as info:
+        _prefilter(_client(conn, fake))
+    assert info.value.retry is True
+    assert conn.execute("SELECT COUNT(*) FROM llm_usage").fetchone()[0] == 0

@@ -25,7 +25,7 @@ from clipper.content.batch import (
 )
 from clipper.content.scanner import ContentScanner
 from clipper.learn.service import gate_model, gate_probability
-from clipper.llm.client import LLMClient, LLMRefused
+from clipper.llm.client import LLMBudgetExceeded, LLMClient, LLMRefused
 from clipper.llm.prompts import (
     PREFILTER_SYSTEM,
     FeedbackExamples,
@@ -58,6 +58,9 @@ log = get_logger("stages")
 
 PREFILTER_PRIORITY = 20
 JUDGE_PRIORITY_BASE = 100
+# Judge output is a small JSON plus adaptive thinking; this caps a single answer at
+# about $0.08 on Sonnet 5.5 (16000 would allow ~$0.16).
+JUDGE_MAX_TOKENS = 8000
 RECENT_TITLES = 30
 RENDER_PRIORITY_BASE = 50
 FEEDBACK_EXAMPLES = 20
@@ -299,7 +302,7 @@ class Stages:
                 effort=self.cfg.llm.prefilter_effort,
                 max_tokens=2000,
             )
-        except LLMRefused as exc:
+        except (LLMRefused, LLMBudgetExceeded) as exc:
             self._reject(candidate_id, clip, "prefilter", str(exc))
             return
         dec = res.value
@@ -455,8 +458,9 @@ class Stages:
                 user=user,
                 schema=JudgeDecision,
                 effort=self.cfg.llm.judge_effort,
+                max_tokens=JUDGE_MAX_TOKENS,
             )
-        except LLMRefused as exc:
+        except (LLMRefused, LLMBudgetExceeded) as exc:
             self._reject(candidate_id, clip, "judge", str(exc))
             return
         dec = res.value

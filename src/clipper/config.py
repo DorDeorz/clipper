@@ -241,7 +241,11 @@ class LLMConfig(_Strict):
     judge_model: str = "claude-sonnet-5-5"
     max_candidates_per_hour: int = 12
     min_keep_score: int = 65
-    monthly_budget_usd: float = 30
+    # Hard limits: no Claude request is sent once either is reached (UTC month / day).
+    monthly_budget_usd: float = Field(30, ge=0)
+    daily_budget_usd: float = Field(3, ge=0)
+    # Fraction of the monthly budget after which the judge uses the prefilter model.
+    downgrade_at: float = Field(0.8, ge=0, le=1)
     prefilter_effort: Literal["low", "medium", "high", "xhigh", "max"] = "low"
     judge_effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
     # Server-side refusal fallback (beta) for models that support it.

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from clipper.config import ContentScanConfig
 from clipper.content.transcript import TLine, speech_ratio, window_text
 from clipper.detect.merge import Draft
-from clipper.llm.client import LLMClient, LLMRefused
+from clipper.llm.client import LLMBudgetExceeded, LLMClient, LLMRefused
 from clipper.llm.schemas import ContentScanDecision
 from clipper.log import get_logger
 from clipper.models import ChatMessage
@@ -59,6 +59,9 @@ def content_user(
         f"Chat hızı: {chat_rate:.1f} mesaj/sn{base}\n\n"
         f"## Transkript\n{transcript or '(konuşma yok)'}\n\n## Chat örnekleri\n{samples}"
     )
+
+
+BUDGET_REASON = "bütçe doldu"
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +140,9 @@ class ContentScanner:
         except LLMRefused as exc:
             log.warning("content scan refused", extra={"t0": win_start, "error": str(exc)})
             return ScanOutcome(win_start, win_end, skipped=True, reason="reddedildi")
+        except LLMBudgetExceeded as exc:
+            log.warning("content scan skipped: budget", extra={"t0": win_start, "error": str(exc)})
+            return ScanOutcome(win_start, win_end, skipped=True, reason=BUDGET_REASON)
         d = res.value
         length = win_end - win_start
         bs = min(max(d.best_start, 0.0), length)

@@ -219,8 +219,11 @@ def test_llm06_overloaded_is_retried_and_never_swallowed(conn: sqlite3.Connectio
     # Still overloaded after the SDK retries: the error propagates (the job queue retries
     # the stage with backoff) instead of turning into a failed candidate.
     client, _ = _client_with([529, 529, 529], max_retries=2)
-    with pytest.raises(anthropic.APIStatusError):
+    from clipper.llm.client import LLMTransient
+
+    with pytest.raises(LLMTransient) as info:
         _ask(LLMClient(conn, LLMConfig(), client))
+    assert info.value.retry is True  # the worker re-queues it; nothing was billed
 
 
 # ---- RND-01 / RND-06 / RND-08 -----------------------------------------------------------

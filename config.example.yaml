@@ -48,7 +48,11 @@ llm:
   judge_model: claude-sonnet-5-5     # premium: claude-opus-5-5
   max_candidates_per_hour: 12
   min_keep_score: 65
+  # Harcama sınırları (USD, UTC ay/gün). Dolunca hiçbir Claude isteği gönderilmez.
   monthly_budget_usd: 30
+  daily_budget_usd: 3
+  # Aylık bütçenin bu oranından sonra judge ucuz modele (Haiku) düşer.
+  downgrade_at: 0.8
 render:
   width: 1080
   height: 1920
