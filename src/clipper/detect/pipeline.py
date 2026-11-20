@@ -22,7 +22,7 @@ from clipper.content.transcript import (
 from clipper.detect.audio import segments_db
 from clipper.detect.detector import Detection, Detector, Observation
 from clipper.detect.events import EventFilter, LiveEvent, events_near, read_events
-from clipper.detect.keywords_tr import KeywordScorer
+from clipper.detect.keywords_tr import KeywordScorer, parse_extra_keywords
 from clipper.detect.merge import Draft, merge_drafts
 from clipper.detect.signals import SecondBin, bin_messages
 from clipper.log import get_logger
@@ -109,8 +109,7 @@ async def analyze_session(
 
     dcfg = detector_config(cfg.detector, sess["detector_overrides"])
     dcfg = dcfg.model_copy(update={"viewer_clip_bonus": cfg.viewer_clips.bonus})
-    extra = json.loads(sess["keywords"]) if sess["keywords"] else {}
-    scorer = KeywordScorer(extra={k: float(v) for k, v in extra.items()})
+    scorer = KeywordScorer(extra=parse_extra_keywords(sess["keywords"]))
     bins = bin_messages(messages, scorer, cfg.events.thanks_words)
     lines = read_lines(session_dir / TRANSCRIPT_FILE)
     span = covered_seconds(lines)
