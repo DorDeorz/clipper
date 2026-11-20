@@ -16,7 +16,14 @@ from clipper.config import Config, PathsConfig, load_secrets
 from clipper.panel import app as panel_app
 from clipper.panel import setup
 from clipper.panel.app import PanelDeps, create_app
-from clipper.panel.vodjobs import VodError, VodTask, VodTasks, detect_source, parse_ref
+from clipper.panel.vodjobs import (
+    VodError,
+    VodTask,
+    VodTasks,
+    detect_source,
+    kick_slug,
+    parse_ref,
+)
 from clipper.runner import already_running
 from clipper.util.crypto import generate_key
 from tests.panel_client import panel_client
@@ -109,6 +116,8 @@ def test_detect_and_parse_refs() -> None:
     u = "0b8a5e3c-1d2f-4a5b-9c8d-7e6f5a4b3c2d"
     assert detect_source(f"https://kick.com/neon/videos/{u}") == "kick"
     assert parse_ref("kick", f"https://kick.com/neon/videos/{u.upper()}") == u
+    assert kick_slug(f"https://kick.com/Neon_tv/videos/{u}") == "neon_tv"
+    assert kick_slug(u) is None
     assert detect_source("https://www.twitch.tv/videos/2345678901") == "twitch"
     assert parse_ref("twitch", "https://www.twitch.tv/videos/2345678901?t=1h") == "2345678901"
     assert parse_ref("twitch", "v123") == "123"

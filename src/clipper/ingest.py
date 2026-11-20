@@ -9,6 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -36,6 +37,7 @@ from clipper.sessions import (
     get_or_create_streamer,
     write_session_info,
 )
+from clipper.util.timeutil import parse_iso
 
 log = get_logger("ingest")
 
@@ -254,14 +256,80 @@ def make_kick_api(cfg: Config, client: httpx.AsyncClient) -> kick_api.KickAPI:
     return kick_api.KickAPI(getter, cfg.kick)
 
 
+# Kick's share links (kick.com/<slug>/videos/<id>) now carry a UUIDv7 whose first 48 bits
+# are a millisecond timestamp around the stream. The API only knows the older video uuid,
+# so such links are matched against the channel's VOD list by time.
+KICK_LINK_SLACK_SECONDS = 1800.0
+
+
+def uuid7_time(uuid: str) -> float | None:
+    """Unix seconds embedded in a UUIDv7, or None for other UUID versions."""
+    hexs = uuid.replace("-", "").lower()
+    if len(hexs) != 32 or hexs[12] != "7":
+        return None
+    try:
+        return int(hexs[:12], 16) / 1000.0
+    except ValueError:
+        return None
+
+
+def match_kick_video(videos: list[dict[str, Any]], ts: float) -> str | None:
+    """API uuid of the finished VOD whose [start - slack, end + slack] holds `ts`
+    (closest start wins)."""
+    best: tuple[float, str] | None = None
+    for v in videos:
+        uid = (v.get("video") or {}).get("uuid")
+        start_raw = v.get("start_time")
+        if not uid or not start_raw or v.get("is_live"):
+            continue
+        try:
+            start = parse_iso(str(start_raw))
+        except ValueError:
+            continue
+        end = start + float(v.get("duration") or 0) / 1000.0
+        if start - KICK_LINK_SLACK_SECONDS <= ts <= end + KICK_LINK_SLACK_SECONDS:
+            dist = abs(ts - start)
+            if best is None or dist < best[0]:
+                best = (dist, str(uid))
+    return best[1] if best else None
+
+
+async def resolve_kick_uuid(
+    api: kick_api.KickAPI,
+    uuid: str,
+    slug: str | None,
+    say: Callable[[str], None] = lambda _m: None,
+) -> str:
+    ts = uuid7_time(uuid)
+    if ts is None:
+        return uuid
+    if not slug:
+        raise IngestError(
+            "Bu Kick linki yeni biçimde; kanal adını bulmak için linkin tamamını"
+            " (kick.com/<kanal>/videos/...) yapıştır."
+        )
+    match = match_kick_video(await api.videos(slug.lower()), ts)
+    if match is None:
+        when = datetime.fromtimestamp(ts, UTC).strftime("%Y-%m-%d %H:%M UTC")
+        raise IngestError(
+            f"{slug} kanalında {when} civarında bitmiş bir VOD bulunamadı. Yayın hâlâ"
+            " sürüyor ya da Kick henüz VOD'u yayımlamamış olabilir."
+        )
+    say(f"Yeni Kick linki VOD {match} ile eşleşti.")
+    return match
+
+
 async def ingest_kick_vod(
     conn: sqlite3.Connection,
     cfg: Config,
     client: httpx.AsyncClient,
     uuid: str,
     say: Callable[[str], None] = lambda _m: None,
+    *,
+    slug: str | None = None,
 ) -> IngestResult:
     api = make_kick_api(cfg, client)
+    uuid = await resolve_kick_uuid(api, uuid, slug, say)
     meta = kick_vod.parse_video(await api.video(uuid))
     if meta.is_live or meta.duration <= 0:
         raise IngestError(f"Kick VOD {uuid} hâlâ canlı ya da süresi yok; yayın bitince dene.")
