@@ -113,6 +113,38 @@ def test_exposed_panel_checks_origin_against_host(conn: sqlite3.Connection, tmp_
     assert ok.status_code == 201
 
 
+def test_tunnel_host_allowed_only_with_password(conn: sqlite3.Connection, tmp_path: Path) -> None:
+    import base64
+
+    from clipper.panel.app import host_allowed
+
+    assert host_allowed("abc-def.trycloudflare.com", [".trycloudflare.com"])
+    assert not host_allowed("trycloudflare.com", [".trycloudflare.com"])
+    assert not host_allowed("eviltrycloudflare.com", [".trycloudflare.com"])
+    assert host_allowed("panel.example.org", ["Panel.Example.org"])
+
+    tunnel = "https://abc-def.trycloudflare.com"
+    cfg = Config(
+        paths=PathsConfig(data_dir=tmp_path / "data"),
+        panel=PanelConfig(allowed_hosts=[".trycloudflare.com"]),
+    )
+    # Without a password the tunnel host is still refused (loopback rule wins).
+    no_pw = create_app(PanelDeps(conn, cfg, Secrets()))
+    assert TestClient(no_pw, base_url=tunnel).get("/api/status").status_code == 403
+
+    app = create_app(PanelDeps(conn, cfg, Secrets(panel_password=SecretStr("gizli"))))
+    auth = {"Authorization": "Basic " + base64.b64encode(b"panel:gizli").decode()}
+    c = TestClient(app, base_url=tunnel, headers=auth)
+    assert c.get("/api/status").status_code == 200
+    assert TestClient(app, base_url=tunnel).get("/api/status").status_code == 401  # no password
+    assert (
+        TestClient(app, base_url="http://evil.example:8765").get("/api/status").status_code == 403
+    )
+    c.headers["X-CSRF-Token"] = app.state.csrf_token
+    ok = c.post("/api/streamers", json=STREAMER, headers={"Origin": tunnel})
+    assert ok.status_code == 201
+
+
 def test_panel_js_sends_csrf_header() -> None:
     js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
     assert "X-CSRF-Token" in js and "/api/csrf" in js

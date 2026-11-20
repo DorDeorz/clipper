@@ -124,6 +124,9 @@ class YouTubeConfig(_Strict):
 class PanelConfig(_Strict):
     host: str = "127.0.0.1"
     port: int = 8765
+    # Extra Host names accepted while bound to loopback, for a tunnel in front of the panel
+    # (e.g. Cloudflare). ".example.com" matches any subdomain. Ignored without PANEL_PASSWORD.
+    allowed_hosts: list[str] = Field(default_factory=list)
 
 
 class RecorderConfig(_Strict):
