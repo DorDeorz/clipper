@@ -13,7 +13,7 @@ import ipaddress
 import json
 import secrets as _secrets
 import sqlite3
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -111,8 +111,27 @@ def _origin_host(origin: str) -> str | None:
     return parts.netloc.lower() or None
 
 
+def host_allowed(host: str, allowed: Sequence[str]) -> bool:
+    """`allowed` entries are exact host names, or `.suffix` for any subdomain of it."""
+    for entry in allowed:
+        e = entry.strip().lower()
+        if not e:
+            continue
+        if e.startswith("."):
+            if host.endswith(e) and len(host) > len(e):
+                return True
+        elif host == e:
+            return True
+    return False
+
+
 def request_guard_error(
-    method: str, headers: dict[str, str], *, loopback: bool, token: str
+    method: str,
+    headers: dict[str, str],
+    *,
+    loopback: bool,
+    token: str,
+    allowed_hosts: Sequence[str] = (),
 ) -> tuple[int, str] | None:
     """Audit B-02. Returns (status, Turkish message) when the request must be refused.
 
@@ -123,7 +142,8 @@ def request_guard_error(
       same-origin `Origin`/`Referer` when the browser sends one, and a JSON body.
     """
     host = headers.get("host", "")
-    if loopback and not is_loopback(_host_name(host)):
+    name = _host_name(host)
+    if loopback and not is_loopback(name) and not host_allowed(name, allowed_hosts):
         return 403, "panel sadece yerel adresten (127.0.0.1 / localhost) açılabilir"
     if method not in UNSAFE_METHODS:
         return None
@@ -204,6 +224,8 @@ def create_app(deps: PanelDeps) -> FastAPI:
     # Registered after basic auth, so it runs first (outermost middleware).
     app.state.csrf_token = _secrets.token_urlsafe(32)
     loopback = is_loopback(cfg.panel.host)
+    # A tunnel host is only trusted behind the panel password (basic auth runs after this).
+    allowed_hosts = tuple(cfg.panel.allowed_hosts) if password is not None else ()
 
     @app.middleware("http")
     async def _request_guard(
@@ -214,6 +236,7 @@ def create_app(deps: PanelDeps) -> FastAPI:
             {k.lower(): v for k, v in request.headers.items()},
             loopback=loopback,
             token=app.state.csrf_token,
+            allowed_hosts=allowed_hosts,
         )
         if refused is not None:
             status, message = refused

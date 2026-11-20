@@ -2,6 +2,9 @@
 # against this file's directory.
 paths: { data_dir: ./data, ffmpeg: ffmpeg, ffprobe: ffprobe }
 panel: { host: 127.0.0.1, port: 8765 }
+# Behind a tunnel (e.g. Cloudflare), allow its host while bound to 127.0.0.1. Needs
+# PANEL_PASSWORD; ".trycloudflare.com" matches every quick-tunnel address.
+# panel: { host: 127.0.0.1, port: 8765, allowed_hosts: [".trycloudflare.com"] }
 # anonymous: no accounts/API keys needed for monitoring (default)
 # official:  Twitch Helix / YouTube Data API fallback (needs keys in .env)
 monitoring: { mode: anonymous }
