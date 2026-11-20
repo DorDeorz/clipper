@@ -2,7 +2,7 @@
 
 - Segments of ended sessions are deleted `recorder.buffer_minutes` after the session
   ended, unless a cut job is still waiting for them. (Running live sessions prune their
-  own ring buffer.)
+  own ring buffer.) VOD sessions keep their source for `retention.vod_keep_hours`.
 - Raw cuts after `raw_days`, final clips after `final_days`. A final clip is kept while
   any publication of it is still pending.
 - When the data disk is above `disk_high_percent`, the aggressive ages are used and a
@@ -111,11 +111,14 @@ def cleanup(
     # 1) segments of ended sessions
     busy = _sessions_with_waiting_cuts(conn)
     buffer = cfg.recorder.buffer_minutes * 60.0
+    vod_keep = max(buffer, rc.vod_keep_hours * 3600.0)
     for s in conn.execute(
-        "SELECT id, ended_at FROM sessions WHERE status != 'recording' AND ended_at IS NOT NULL"
+        "SELECT id, source, ended_at FROM sessions"
+        " WHERE status != 'recording' AND ended_at IS NOT NULL"
     ).fetchall():
         ended = _ts(s["ended_at"])
-        if ended is None or now - ended < buffer or s["id"] in busy:
+        keep = vod_keep if s["source"] == "vod" else buffer
+        if ended is None or now - ended < keep or s["id"] in busy:
             continue
         segs = conn.execute(
             "SELECT id, path FROM segments WHERE session_id = ? AND deleted = 0", (s["id"],)

@@ -278,6 +278,37 @@ def test_retention(tmp_path: Path) -> None:
     assert files["final_pending"].exists()  # still waiting to be published
 
 
+def test_retention_keeps_fresh_vod_source(tmp_path: Path) -> None:
+    """A VOD session 'ends' at ingest. If detection then fails, no job protects its source;
+    it must survive `vod_keep_hours`, not just the live ring-buffer minutes."""
+    cfg = Config(paths=PathsConfig(data_dir=tmp_path / "data"),
+                 retention=RetentionConfig(vod_keep_hours=24))  # fmt: skip
+    conn = db.open_db(cfg.db_path)
+    now = 2_000_000_000.0
+    conn.execute(
+        "INSERT INTO streamers (display_name, platform, channel, created_at)"
+        " VALUES ('A', 'kick', 'a', 'x')"
+    )
+    files = {}
+    for i, (name, age_h) in enumerate((("vod_fresh", 2), ("vod_old", 30), ("live_2h", 2)), 1):
+        files[name] = tmp_path / f"{name}.mp4"
+        files[name].write_bytes(b"x" * 1000)
+        source = "live" if name.startswith("live") else "vod"
+        conn.execute(
+            "INSERT INTO sessions (streamer_id, source, started_at, ended_at, dir, status)"
+            " VALUES (1, ?, 'x', ?, '.', 'ended')",
+            (source, to_iso(now - age_h * 3600)),
+        )
+        conn.execute(
+            "INSERT INTO segments (session_id, seq, path, pdt_start, duration)"
+            " VALUES (?, 0, ?, 0, 2)",
+            (i, str(files[name])),
+        )
+    rep = cleanup(conn, cfg, now=now, usage=lambda _p: (90, 100))  # aggressive, too
+    assert rep.segments == 2
+    assert {k for k, p in files.items() if p.exists()} == {"vod_fresh"}
+
+
 # ---- autostart --------------------------------------------------------------------------
 
 
