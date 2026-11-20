@@ -6,6 +6,7 @@ Emote tokens also match prefixed variants such as Kick channel/collectible emote
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 
@@ -58,6 +59,34 @@ DEFAULT_CATEGORIES: tuple[Category, ...] = (
     ),
     Category("fail", 0.8, tokens=("F", "RIP", "L"), words=("rip", "bruh"), substrings=("💀",)),
 )
+
+
+DEFAULT_EXTRA_WEIGHT = 1.0
+
+
+def parse_extra_keywords(raw: str | None) -> dict[str, float]:
+    """Streamer keywords from the DB: `{"word": weight}` or the panel's `["word", ...]`.
+
+    The panel form stores a plain list (one weight for all words); older rows and config use
+    a word -> weight mapping. Anything else (bad JSON, other types) means no extra keywords.
+    """
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return {}
+    if isinstance(data, dict):
+        out: dict[str, float] = {}
+        for k, v in data.items():
+            try:
+                out[str(k)] = float(v)
+            except (TypeError, ValueError):
+                continue
+        return out
+    if isinstance(data, list):
+        return {str(w).strip(): DEFAULT_EXTRA_WEIGHT for w in data if str(w).strip()}
+    return {}
 
 
 @dataclass(slots=True)

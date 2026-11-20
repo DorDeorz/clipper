@@ -29,7 +29,7 @@ from clipper.config import Config
 from clipper.detect.audio import segment_db
 from clipper.detect.detector import Detection, Detector, Observation
 from clipper.detect.events import EventFilter, LiveEvent, events_near, write_events
-from clipper.detect.keywords_tr import KeywordScorer
+from clipper.detect.keywords_tr import KeywordScorer, parse_extra_keywords
 from clipper.detect.merge import Draft
 from clipper.detect.pipeline import (
     _context_features,
@@ -121,9 +121,9 @@ class LiveSession(ChatSink):
 
         dcfg = detector_config(cfg.detector, streamer["detector_overrides"])
         self.dcfg = dcfg.model_copy(update={"viewer_clip_bonus": cfg.viewer_clips.bonus})
-        extra = json.loads(streamer["keywords"]) if streamer["keywords"] else {}
         self.binner = ChatBinner(
-            KeywordScorer(extra={k: float(v) for k, v in extra.items()}), cfg.events.thanks_words
+            KeywordScorer(extra=parse_extra_keywords(streamer["keywords"])),
+            cfg.events.thanks_words,
         )
         self.detector = Detector(self.dcfg)
         self.filter = EventFilter(cfg.events)

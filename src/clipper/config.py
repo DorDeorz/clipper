@@ -310,6 +310,9 @@ class RetentionConfig(_Strict):
     aggressive_raw_days: float = 1
     aggressive_final_days: float = 7
     check_every_minutes: float = 30
+    # VOD sessions "end" when the download finishes; keep their source while detection and
+    # the content path may still need it (a failed detect queues no job to protect it).
+    vod_keep_hours: float = 24
 
 
 class LearnConfig(_Strict):
