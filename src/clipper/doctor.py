@@ -102,6 +102,15 @@ async def _check_cuda() -> Check:
 def _check_whisper() -> Check:
     if importlib.util.find_spec("faster_whisper") is None:
         return Check("faster-whisper", Status.WARN, "kurulu değil (Faz 3'te eklenecek)")
+    from clipper.transcribe.cuda_libs import missing_cuda_dlls
+
+    missing = missing_cuda_dlls()
+    if missing and which("nvidia-smi") is not None:
+        return Check(
+            "faster-whisper",
+            Status.FAIL,
+            f"GPU var ama CUDA kütüphaneleri eksik ({', '.join(missing)}); `uv sync` çalıştır",
+        )
     return Check("faster-whisper", Status.OK, "kurulu")
 
 
