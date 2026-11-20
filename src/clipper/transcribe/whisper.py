@@ -14,6 +14,7 @@ from typing import Any, Protocol
 
 from clipper.config import TranscribeConfig
 from clipper.log import get_logger
+from clipper.transcribe.cuda_libs import ensure_cuda_dlls
 from clipper.util.fs import atomic_write_text
 
 log = get_logger("whisper")
@@ -28,6 +29,7 @@ class _Model(Protocol):
 
 
 def resolve_device(cfg: TranscribeConfig) -> tuple[str, str]:
+    ensure_cuda_dlls()
     device = cfg.device
     if device == "auto":
         try:
@@ -43,6 +45,7 @@ def resolve_device(cfg: TranscribeConfig) -> tuple[str, str]:
 
 
 def _default_loader(cfg: TranscribeConfig, model_dir: Path) -> _Model:
+    ensure_cuda_dlls()
     try:
         from faster_whisper import WhisperModel
     except ImportError as exc:  # pragma: no cover - dependency is declared
