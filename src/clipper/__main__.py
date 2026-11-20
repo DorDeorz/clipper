@@ -58,7 +58,9 @@ def build_parser() -> argparse.ArgumentParser:
     src = p_vod.add_mutually_exclusive_group(required=True)
     src.add_argument("--video", type=Path, help="yerel video dosyası")
     src.add_argument("--twitch-vod", metavar="ID", help="Twitch VOD id'si (anonim indirir)")
-    src.add_argument("--kick-vod", metavar="UUID", help="Kick VOD uuid'si (kick-vods ile bul)")
+    src.add_argument(
+        "--kick-vod", metavar="UUID|LINK", help="Kick VOD uuid'si ya da linki (kick-vods ile bul)"
+    )
     src.add_argument("--youtube", metavar="VIDEO_ID", help="YouTube video id'si (yt-dlp + chat)")
     p_vod.add_argument(
         "--chat", type=Path, help="chat dosyası (.jsonl / .jsonl.gz / TwitchDownloader .json)"
@@ -192,8 +194,15 @@ async def _run_vod(args: argparse.Namespace, cfg: Config) -> int:
         else:
             async with httpx.AsyncClient(http2=False) as client:
                 if args.kick_vod:
+                    from clipper.panel.vodjobs import kick_slug, parse_ref
+
                     result = await ingest.ingest_kick_vod(
-                        conn, cfg, client, args.kick_vod, say=_say
+                        conn,
+                        cfg,
+                        client,
+                        parse_ref("kick", args.kick_vod),
+                        say=_say,
+                        slug=kick_slug(args.kick_vod),
                     )
                 elif args.twitch_vod:
                     result = await ingest.ingest_twitch_vod(

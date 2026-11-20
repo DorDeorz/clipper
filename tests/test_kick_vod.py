@@ -214,3 +214,53 @@ def test_kick_vods_cli_skips_live(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
 
     monkeypatch.setattr(cli.httpx, "AsyncClient", client_factory)
     assert cli.main(["kick-vods", "wtcn"]) == 1
+
+
+# ---- new-style share links (UUIDv7) ----------------------------------------------------
+
+V7_LINK = "01a1f03e-53f8-7112-8fd8-8c495e2de163"  # 2026-11-18 19:59:39 UTC
+LIST = [
+    {"video": {"uuid": "old-earlier"}, "start_time": "2026-11-17 19:00:00", "duration": 3_600_000},
+    {"video": {"uuid": "right-one"}, "start_time": "2026-11-18 19:59:30", "duration": 14_220_000},
+    {"video": {"uuid": "live-now"}, "start_time": "2026-11-18 20:00:00", "duration": 0,
+     "is_live": True},
+]  # fmt: skip
+
+
+def test_uuid7_time() -> None:
+    from datetime import UTC, datetime
+
+    ts = ingest.uuid7_time(V7_LINK)
+    assert ts is not None
+    assert datetime.fromtimestamp(ts, UTC).strftime("%Y-%m-%d %H:%M") == "2026-11-18 19:59"
+    assert ingest.uuid7_time(UUID) is None  # API-style v4 uuid passes through
+    assert ingest.uuid7_time("nonsense") is None
+
+
+def test_match_kick_video_by_time() -> None:
+    ts = ingest.uuid7_time(V7_LINK)
+    assert ts is not None
+    assert ingest.match_kick_video(LIST, ts) == "right-one"
+    assert ingest.match_kick_video(LIST, ts + 3 * 86400) is None
+    assert ingest.match_kick_video(LIST[:1], ts) is None
+
+
+def test_resolve_kick_uuid() -> None:
+    class Api:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def videos(self, slug: str) -> list[dict[str, object]]:
+            self.calls.append(slug)
+            return LIST
+
+    api = Api()
+    said: list[str] = []
+    got = asyncio.run(ingest.resolve_kick_uuid(api, V7_LINK, "BerkCan", said.append))  # type: ignore[arg-type]
+    assert got == "right-one" and api.calls == ["berkcan"] and said
+    assert asyncio.run(ingest.resolve_kick_uuid(api, UUID, None)) == UUID  # type: ignore[arg-type]
+    with pytest.raises(ingest.IngestError, match="linkin tamamını"):
+        asyncio.run(ingest.resolve_kick_uuid(api, V7_LINK, None))  # type: ignore[arg-type]
+    late = "01a2" + V7_LINK[4:]  # far in the future: nothing matches
+    with pytest.raises(ingest.IngestError, match="bulunamadı"):
+        asyncio.run(ingest.resolve_kick_uuid(api, late, "berkcan"))  # type: ignore[arg-type]

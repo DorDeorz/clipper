@@ -44,6 +44,15 @@ def detect_source(text: str) -> Source | None:
     return None
 
 
+KICK_SLUG_RE = re.compile(r"kick\.com/([A-Za-z0-9_-]+)/videos/", re.IGNORECASE)
+
+
+def kick_slug(text: str) -> str | None:
+    """Channel slug from a kick.com/<slug>/videos/<id> link."""
+    m = KICK_SLUG_RE.search(text)
+    return m.group(1).lower() if m else None
+
+
 def parse_ref(source: Source, text: str) -> str:
     """VOD id from a link or a bare id."""
     t = text.strip()
@@ -138,6 +147,8 @@ class VodTasks:
                     del self.tasks[old]
         task.lines.append("Başladı")
         extra = {"streamer": streamer, "chat": chat}
+        if source == "kick":
+            extra["slug"] = kick_slug(text)
         threading.Thread(
             target=self._thread, args=(task, extra), name=f"vod-{task.id}", daemon=True
         ).start()
@@ -161,7 +172,11 @@ class VodTasks:
             await self._runner(task)
 
     async def _ingest(
-        self, task: VodTask, streamer: str | None = None, chat: str | None = None
+        self,
+        task: VodTask,
+        streamer: str | None = None,
+        chat: str | None = None,
+        slug: str | None = None,
     ) -> None:
         from clipper import ingest
         from clipper.content.batch import enqueue_content_path
@@ -178,12 +193,16 @@ class VodTasks:
                 )  # fmt: skip
             else:
                 async with httpx.AsyncClient(http2=False) as client:
-                    fn = {
-                        "kick": ingest.ingest_kick_vod,
-                        "twitch": ingest.ingest_twitch_vod,
-                        "youtube": ingest.ingest_youtube_vod,
-                    }[task.source]
-                    result = await fn(conn, cfg, client, task.ref, say=task.say)
+                    if task.source == "kick":
+                        result = await ingest.ingest_kick_vod(
+                            conn, cfg, client, task.ref, say=task.say, slug=slug
+                        )
+                    else:
+                        fn = {
+                            "twitch": ingest.ingest_twitch_vod,
+                            "youtube": ingest.ingest_youtube_vod,
+                        }[task.source]
+                        result = await fn(conn, cfg, client, task.ref, say=task.say)
             task.session_id = result.session_id
             task.say(f"Video ve chat hazır ({result.chat_count} mesaj). Anlar aranıyor...")
             res = await analyze_session(conn, cfg, result.session_id, with_audio=True)
