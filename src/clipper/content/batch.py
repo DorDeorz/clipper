@@ -76,6 +76,65 @@ async def extract_session_audio(
     return float(segs[0]["pdt_start"])
 
 
+def _shift_segments(segments: list[dict[str, Any]], by: float) -> list[dict[str, Any]]:
+    """Whisper segments (and their words) moved `by` seconds later."""
+    if not by:
+        return segments
+    out = []
+    for seg in segments:
+        s = dict(seg)
+        s["start"] = round(float(seg["start"]) + by, 3)
+        s["end"] = round(float(seg["end"]) + by, 3)
+        s["words"] = [
+            {**w, "s": round(float(w["s"]) + by, 3), "e": round(float(w["e"]) + by, 3)}
+            for w in seg.get("words") or []
+        ]
+        out.append(s)
+    return out
+
+
+def _wav_duration(wav: Path) -> float:
+    import wave
+
+    with wave.open(str(wav), "rb") as w:
+        return w.getnframes() / float(w.getframerate() or 1)
+
+
+async def _transcribe_in_chunks(
+    cfg: Config, transcriber: Transcriber, wav: Path, raw_json: Path, t0: float
+) -> list[dict[str, Any]]:
+    """Transcribe `wav` in `transcribe.session_chunk_minutes` pieces; times stay relative to
+    the full WAV. Short sessions go through in one call, as before."""
+    chunk = max(60.0, cfg.transcribe.session_chunk_minutes * 60.0)
+    total = _wav_duration(wav)
+    if total <= chunk:
+        return await transcriber.transcribe(wav, raw_json, origin=t0)
+    piece = wav.with_name("session_part.wav")
+    out: list[dict[str, Any]] = []
+    start = 0.0
+    try:
+        while start < total:
+            res = await run_tool(
+                cfg.paths.ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+                "-ss", f"{start:.3f}", "-t", f"{chunk:.3f}", "-i", str(wav),
+                "-c:a", "pcm_s16le", str(piece),
+                timeout=600,
+            )  # fmt: skip
+            if res.returncode != 0:
+                raise MediaError(f"ses parçası kesilemedi: {res.stderr.strip()[:400]}")
+            segs = await transcriber.transcribe(piece, raw_json, origin=t0 + start)
+            out.extend(_shift_segments(segs, start))
+            log.info(
+                "session transcribe chunk",
+                extra={"from": round(start), "total": round(total), "segments": len(segs)},
+            )
+            start += chunk
+    finally:
+        piece.unlink(missing_ok=True)
+    atomic_write_text(raw_json, json.dumps(out, ensure_ascii=False))
+    return out
+
+
 async def transcribe_session(
     conn: sqlite3.Connection, cfg: Config, session_id: int, transcriber: Transcriber
 ) -> Path:
@@ -90,7 +149,7 @@ async def transcribe_session(
     t0 = await extract_session_audio(conn, session_id, wav, cfg.paths.ffmpeg)
     raw_json = work / "session_transcript.json"
     try:
-        segments = await transcriber.transcribe(wav, raw_json, origin=t0)
+        segments = await _transcribe_in_chunks(cfg, transcriber, wav, raw_json, t0)
     finally:
         wav.unlink(missing_ok=True)
     lines = from_whisper(segments, offset=t0)

@@ -229,6 +229,9 @@ class TranscribeConfig(_Strict):
     compute_type: str = "auto"
     language: str = "tr"
     beam_size: int = 5
+    # Whole-session (VOD) transcripts run in pieces of this length: faster-whisper builds
+    # features for the entire file at once, which needs ~9 GB RAM for an 11 h stream.
+    session_chunk_minutes: float = 30
     # TESTPLAN: "fake" reads `fake_path` (jsonl lines {"start","end","text"} in session time)
     # instead of running whisper. `cache_dir` keeps transcripts by audio hash (eval reruns).
     backend: Literal["whisper", "fake"] = "whisper"
