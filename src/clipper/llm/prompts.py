@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -49,13 +50,15 @@ başlangıç cümle ortasında OLMAMALI, bir cümle başına hizala; \
 olayın sonucunu ve tepkiyi göster, tepki bitince kes; \
 süre {min_len:g}-{max_len:g} saniye arasında olmalı. \
 Chat tepkisi olaydan birkaç saniye sonra gelir; olayın kendisini transkript ve sesten bul.
-3. title: en fazla 70 karakter, Türkçe, merak uyandıran (clickbait olabilir) ama YALAN \
-OLMAYAN bir başlık. Emoji en fazla 1 tane. Son başlıkları tekrar etme.
-4. hook: ilk 2.5 saniyede ekranda görünecek, en fazla 6 kelimelik kısa bir cümle.
+3. title: en fazla 70 karakter, Türkçe başlık. Kurallar "Başlık ve hook nasıl yazılır" \
+bölümünde. Emoji en fazla 1 tane. Son başlıkları tekrar etme, aynı kalıbı da tekrar etme.
+4. hook: ilk 2.5 saniyede videonun üstünde büyük harflerle görünecek yazı; en fazla 7 \
+kelime ve 45 karakter. Kurallar aşağıda.
 5. caption_fixes: transkriptte yanlış duyulmuş olduğunu düşündüğün kelimeler (oyun terimleri, \
 isimler, argo) için {{"from": "yanlış", "to": "doğru"}} listesi. Emin değilsen boş bırak.
 6. hashtags: 3-6 adet, # ile başlayan, Türkçe/oyun odaklı.
-7. texts: platforma göre metinler. youtube.title (≤100 karakter) ve youtube.description \
+7. texts: platforma göre metinler, başlıkla aynı anlatıcı ağzından (üçüncü şahıs). \
+youtube.title (≤100 karakter) ve youtube.description \
 (2-3 cümle + hashtag'ler), instagram.caption, tiktok.caption (kısa, hashtag'li), \
 x.text (≤270 karakter, LİNK KOYMA).
 8. flags: ünlü/telifli bir müzik duyuluyorsa music_risk=true; çıplaklık/cinsel içerik varsa \
@@ -64,7 +67,41 @@ varsa sensitive_topic=true; anlamak için yayının önceki kısmını bilmek ge
 needs_context=true.
 
 reason alanına kararının Türkçe, 1-2 cümlelik gerekçesini yaz. \
-Gerçek kişiler hakkında transkriptte olmayan iddialar uydurma."""
+Gerçek kişiler hakkında transkriptte olmayan iddialar uydurma.
+
+## Başlık ve hook nasıl yazılır
+Klibi yayıncı değil, onun kliplerini paylaşan bir sayfa paylaşıyor. Bu yüzden title, hook \
+ve texts yayıncının ağzından (birinci şahıs: "yetiremedik", "çaldım", "öldük") YAZILMAZ; \
+olayı dışarıdan anlatan paylaşan kişinin ağzından, üçüncü şahısla yazılır. Başlıkta \
+yayıncının adı geçmeli; adı "Metinlerde kullanılacak ad" satırında verilir. İsme gelen \
+ekleri kesme işaretiyle yaz (Eray'ın, Eray'a, Berkcan'ı). Yayıncının kendi sözünü \
+alıntılamak istersen tırnak içine al: Eray: "Yatın lan yere!".
+
+Hook, kaydırıp geçmek üzere olan izleyiciyi durduracak tek cümledir:
+- Bu klibe özgü somut bir ayrıntı içersin: bir sayı, bir nesne, bir kişi, bir yer ya da \
+yayıncının çarpıcı bir sözü. Başka bir klibe de yapıştırılabilecek bir hook kötüdür.
+- Merak boşluğu açsın ama sonucu söylemesin; izleyici "sonra ne oldu?" diye izlemeye devam \
+etsin. Sonuç, punchline ya da patlama anı videonun içinde kalsın.
+- Durum, soru, tezat ya da iddia kalıplarından birini kullan: "Cebinde 7 dolarla kulübe \
+girdi", "Porsche dururken neyi çaldı?", "Polise yardım etti, ateş yedi".
+- Başlığı kelimesi kelimesine tekrar etme; başlık olayı özetler, hook merakı açar.
+- Şunları yazma: "chat çıldırdı", "chat panikte", "bu ne ya", "inanılmaz an", "olaylar \
+olaylar", "sonuna kadar izle" gibi her klibe uyan genel ifadeler; yayıncının ağzından \
+birinci şahıs cümleler; transkriptte olmayan iddialar.
+- Hook'ta isim zorunlu değil, ama kimin yaptığı belirsiz kalıyorsa ismi kullan.
+
+Başlık da somut olsun: kim, ne yaptı, işin tuhaf/komik tarafı ne. Her başlığa "chat \
+çıldırdı / yerlere yattı / kahkaha attı" ekleme; chat'in tepkisini sadece olayın kendisi \
+chat'in isteği ya da tepkisiyse yaz. Her başlığa oyun adıyla başlama.
+
+Örnekler (kötü → iyi):
+- title "GTA 6'da kulüpte parayı yetiremedik, chat evi satmamızı istedi" → \
+"Eray'ın parası kulübe yetmedi, chat evi satmasını istedi 😂"
+- hook "Para yetmedi, chat panikte!" → "Cebinde 300 dolarla kulübe girdi"
+- title "Polise yardım ettim, bana ateş açtılar 😂" → "Berkcan polise yardım etti, \
+kurşunu kendisi yedi 😂"
+- hook "Polis abi geliyor!" → "Fotoğraf çekerken arkasında kim vardı?"
+- hook "Bu ne yetenek ya!" → "Araba üç takla attı, Eray hâlâ sürüyor" """
 
 
 def judge_system(min_len: float, max_len: float) -> str:
@@ -213,6 +250,20 @@ def feedback_block(fb: FeedbackExamples | None) -> str:
     return "\n".join(out)
 
 
+def spoken_name(display_name: str) -> str:
+    """The name viewers call the streamer by, for third-person titles and hooks.
+
+    Kick/Twitch display names are often a joined handle ("BerkcanOguslu"); a fan page
+    writes "Berkcan". Only a clean CamelCase split of 2+ title-case parts is shortened to
+    its first part; anything else (all caps, digits, "AOGofficial") is kept as is.
+    """
+    name = display_name.strip().lstrip("@")
+    parts = re.findall(r"[A-ZÇĞİÖŞÜ][a-zçğıöşü]+", name)
+    if len(parts) >= 2 and "".join(parts) == name:
+        return parts[0]
+    return name
+
+
 def judge_user(
     streamer: str,
     category: str | None,
@@ -228,7 +279,9 @@ def judge_user(
     extra = f"\n{context}" if context else ""
     tail = f"\n\n{feedback}" if feedback else ""
     return (
-        f"Yayıncı: {streamer}\nKategori: {category or 'bilinmiyor'}\n"
+        f"Yayıncı: {streamer}\n"
+        f"Metinlerde kullanılacak ad: {spoken_name(streamer)}\n"
+        f"Kategori: {category or 'bilinmiyor'}\n"
         f"Ham kesit süresi: {duration:.1f} sn{extra}\n\n"
         f"## Transkript\n{transcript}\n\n## Chat (saniye: adet | örnekler)\n{chat}\n\n"
         f"## Ses enerjisi (saniye:dBFS)\n{audio}\n\n## Son yayınlanan başlıklar\n{titles}"
