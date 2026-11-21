@@ -26,6 +26,8 @@ log = get_logger("scheduler")
 ORDER = ("youtube", "instagram", "x", "tiktok")
 ACTIVE = ("scheduled", "uploading", "processing", "retrying", "published", "inbox")
 NO_ACCOUNT = "-"
+# llm_json key: platforms the reviewer approved while a re-render was running
+APPROVE_AFTER_RENDER = "approve_after_render"
 PUBLISH_PRIORITY = 50
 PUBLISH_MAX_ATTEMPTS = 6
 Accounts = Callable[[str], list[str]]
@@ -234,3 +236,38 @@ def maybe_auto_publish(
     plan(conn, cfg, clip_id, targets, accounts, now=now)
     log.info("clip auto-approved", extra={"clip_id": clip_id})
     return True
+
+
+def finish_deferred_approval(conn: sqlite3.Connection, clip_id: int) -> list[str] | None:
+    """If the reviewer pressed Approve while this clip was being re-rendered, mark it
+    approved now and return the platforms to schedule; None when nothing was waiting."""
+    row = conn.execute("SELECT review, llm_json FROM clips WHERE id = ?", (clip_id,)).fetchone()
+    llm = json.loads(row["llm_json"]) if row and row["llm_json"] else {}
+    if APPROVE_AFTER_RENDER not in llm:
+        return None
+    platforms = [str(p) for p in llm.pop(APPROVE_AFTER_RENDER) or []]
+    approved = row["review"] == "pending"
+    conn.execute(
+        "UPDATE clips SET review = ?, llm_json = ? WHERE id = ?",
+        ("approved" if approved else row["review"], json.dumps(llm, ensure_ascii=False), clip_id),
+    )
+    return platforms if approved else []
+
+
+def after_render(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    clip_id: int,
+    accounts: Accounts,
+    *,
+    now: float | None = None,
+) -> None:
+    """Render hook: finish an approval that waited for this render, else the auto-publish
+    rule."""
+    platforms = finish_deferred_approval(conn, clip_id)
+    if platforms is None:
+        maybe_auto_publish(conn, cfg, clip_id, accounts, now=now)
+        return
+    log.info("deferred approval finished", extra={"clip_id": clip_id})
+    if platforms:
+        plan(conn, cfg, clip_id, platforms, accounts, now=now)

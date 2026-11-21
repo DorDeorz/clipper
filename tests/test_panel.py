@@ -150,13 +150,67 @@ def test_trim_edit_rerenders_and_keeps_deltas(client: TestClient, world: Any) ->
     job = conn.execute("SELECT type, priority, payload FROM jobs").fetchone()
     assert job["type"] == "render" and job["priority"] == 5
     assert conn.execute("SELECT status FROM candidates WHERE id = 1").fetchone()[0] == "judged"
-    # approve is refused until the new render lands
-    assert client.post("/api/clips/1/approve", json={"platforms": []}).status_code == 400
-    conn.execute("UPDATE candidates SET status = 'rendered' WHERE id = 1")
-    client.post("/api/clips/1/approve", json={"platforms": ["youtube"]})
+    # approving during the re-render is stored, not applied to the old video
+    r = client.post("/api/clips/1/approve", json={"platforms": ["youtube"]}).json()
+    assert r == {"ok": True, "decision": "edited", "planned": 0, "deferred": True}
     fb = conn.execute("SELECT * FROM feedback").fetchone()
     assert (fb["start_delta"], fb["end_delta"]) == (1.5, -2.0)
     assert fb["decision"] == "edited" and fb["title_edited"] == 0
+    assert conn.execute("SELECT review FROM clips WHERE id = 1").fetchone()[0] == "pending"
+    (card,) = client.get("/api/clips?view=working").json()
+    assert card["approve_pending"] is True
+
+
+def test_approve_during_rerender_completes_after_render(client: TestClient, world: Any) -> None:
+    """Bug: after 'Yeniden render', Approve left the clip in the review queue."""
+    from clipper.publish import scheduler
+
+    conn, cfg = world
+    assert client.post("/api/clips/1/rerender").json() == {"ok": True}
+    assert client.post("/api/clips/1/approve", json={"platforms": ["youtube"]}).json()["deferred"]
+    # the render job finishes: Stages sets 'rendered' and calls the after-render hook
+    conn.execute("UPDATE candidates SET status = 'rendered' WHERE id = 1")
+    scheduler.after_render(conn, cfg, 1, lambda p: ["kanal"], now=1_800_000_000.0)
+    row = conn.execute("SELECT review, llm_json FROM clips WHERE id = 1").fetchone()
+    assert row["review"] == "approved"
+    llm = json.loads(row["llm_json"])
+    assert scheduler.APPROVE_AFTER_RENDER not in llm and llm["publish_targets"] == ["youtube"]
+    pubs = conn.execute("SELECT platform, status FROM publications").fetchall()
+    assert [tuple(p) for p in pubs] == [("youtube", "scheduled")]
+    assert client.get("/api/clips?view=review").json() == []
+    assert conn.execute("SELECT COUNT(*) FROM feedback").fetchone()[0] == 1
+    # a second approve of an already reviewed clip is refused (no duplicate feedback)
+    assert client.post("/api/clips/1/approve", json={"platforms": []}).status_code == 400
+
+
+def test_after_render_without_deferred_keeps_auto_publish_rule(world: Any) -> None:
+    from clipper.publish import scheduler
+
+    conn, cfg = world
+    scheduler.after_render(conn, cfg, 1, lambda p: ["kanal"])
+    assert conn.execute("SELECT review FROM clips WHERE id = 1").fetchone()[0] == "pending"
+    assert conn.execute("SELECT COUNT(*) FROM publications").fetchone()[0] == 0
+
+
+def test_hook_edit_reaches_rerender_and_media_is_versioned(client: TestClient, world: Any) -> None:
+    """Bug: an edited hook did not show in the re-rendered video. The render job reads the
+    saved hook, and the card's media URL carries a version so caches fetch the new file."""
+    import os
+
+    conn, _ = world
+    v1 = client.get("/api/clips?view=review").json()[0]["media_v"]
+    assert isinstance(v1, int)
+    r = client.put("/api/clips/1", json={"title": "Yeni", "hook": "yeni hook"}).json()
+    assert r == {"needs_render": True, "rendering": True}
+    llm = json.loads(conn.execute("SELECT llm_json FROM clips WHERE id = 1").fetchone()[0])
+    assert llm["judge"]["hook"] == "yeni hook"  # what Stages.handle_render passes on
+    final = Path(conn.execute("SELECT final_path FROM clips WHERE id = 1").fetchone()[0])
+    os.utime(final, ns=(final.stat().st_atime_ns, final.stat().st_mtime_ns + 5_000_000_000))
+    conn.execute("UPDATE candidates SET status = 'rendered' WHERE id = 1")
+    card = client.get("/api/clips?view=review").json()[0]
+    assert card["media_v"] != v1 and card["hook"] == "yeni hook"
+    media = client.get("/media/sessions/1/clips/1/final.mp4?v=1")
+    assert media.status_code == 200 and media.headers["cache-control"] == "no-cache"
 
 
 def test_edit_validation(client: TestClient) -> None:

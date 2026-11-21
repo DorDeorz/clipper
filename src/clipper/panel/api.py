@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from clipper import feedback, jobs
+from clipper.publish.scheduler import APPROVE_AFTER_RENDER
 from clipper.render.layouts import LAYOUTS, Rect
 from clipper.stages import RENDER_PRIORITY_BASE
 from clipper.util.timeutil import iso_now
@@ -28,6 +29,17 @@ class PanelError(Exception):
     def __init__(self, message: str, status: int = 400) -> None:
         super().__init__(message)
         self.status = status
+
+
+def _mtime(path: str | None) -> int | None:
+    """Cache-buster for media URLs: a re-render overwrites final.mp4 / thumb.jpg in place,
+    so without a version the browser (or a CDN/tunnel cache) keeps showing the old video."""
+    if not path:
+        return None
+    try:
+        return Path(path).stat().st_mtime_ns // 1_000_000
+    except OSError:
+        return None
 
 
 def _rel(data_dir: Path, path: str | None) -> str | None:
@@ -220,6 +232,8 @@ def clip_card(row: sqlite3.Row, data_dir: Path) -> dict[str, Any]:
         "end": row["end_rel"],
         "raw_duration": (llm.get("cut") or {}).get("duration"),
         "video": _rel(data_dir, row["final_path"]),
+        "media_v": _mtime(row["final_path"]),
+        "approve_pending": APPROVE_AFTER_RENDER in llm,
         "raw_video": _rel(data_dir, row["raw_path"]),
         "thumb": _rel(data_dir, row["thumb_path"]),
         "publish_targets": llm.get("publish_targets") or [],
@@ -323,9 +337,16 @@ def approve(
     platforms: list[str],
     on_approved: Callable[[int, list[str]], None] | None = None,
 ) -> str:
+    """Approve a rendered clip. If the clip is being re-rendered right now (an edit to the
+    hook / trim queued a new render), the approval is stored and finished by
+    `scheduler.after_render` when the new video lands: the clip is never published with
+    the old render. Returns the feedback decision."""
     row = _clip(conn, clip_id)
-    if row["cand_status"] != "rendered" or not row["final_path"]:
+    rerendering = row["cand_status"] == "judged" and bool(row["final_path"])
+    if not rerendering and (row["cand_status"] != "rendered" or not row["final_path"]):
         raise PanelError("klip henüz render edilmedi")
+    if row["review"] != "pending":
+        raise PanelError("bu klip zaten incelendi")
     llm = _jl(row["llm_json"], {})
     sd, ed, title_edited = _deltas(llm, row)
     decision: feedback.Decision = "edited" if (sd or ed or title_edited) else "approved"
@@ -334,6 +355,13 @@ def approve(
     )
     llm["publish_targets"] = platforms
     llm["reviewed_at"] = time.time()
+    if rerendering:
+        llm[APPROVE_AFTER_RENDER] = platforms
+        conn.execute(
+            "UPDATE clips SET llm_json = ? WHERE id = ?",
+            (json.dumps(llm, ensure_ascii=False), clip_id),
+        )
+        return decision
     conn.execute(
         "UPDATE clips SET review = 'approved', llm_json = ? WHERE id = ?",
         (json.dumps(llm, ensure_ascii=False), clip_id),
@@ -341,6 +369,10 @@ def approve(
     if on_approved is not None:
         on_approved(clip_id, platforms)
     return decision
+
+
+def is_deferred(conn: sqlite3.Connection, clip_id: int) -> bool:
+    return APPROVE_AFTER_RENDER in _jl(_clip(conn, clip_id)["llm_json"], {})
 
 
 def reject(conn: sqlite3.Connection, clip_id: int, reason: str, note: str | None = None) -> None:

@@ -164,7 +164,7 @@ async def run(
     import uvicorn
 
     from clipper.publish.runner import Publishing
-    from clipper.publish.scheduler import maybe_auto_publish
+    from clipper.publish.scheduler import after_render
     from clipper.publish.wiring import build as build_publish
     from clipper.stages import Stages
     from clipper.transcribe.whisper import Transcriber
@@ -188,7 +188,7 @@ async def run(
         cfg,
         transcriber=transcriber,
         llm=llm,
-        on_rendered=lambda clip_id: maybe_auto_publish(conn, cfg, clip_id, kit.accounts),
+        on_rendered=lambda clip_id: after_render(conn, cfg, clip_id, kit.accounts),
         extra=publishing.handle,
         extra_types=frozenset({"publish", "publish_status"}),
     )

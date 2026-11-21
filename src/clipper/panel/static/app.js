@@ -84,7 +84,10 @@ async function act(fn, okMsg) {
   }
 }
 
-const media = (rel) => (rel ? `/media/${rel.split("/").map(encodeURIComponent).join("/")}` : null);
+// `v` (file mtime) busts the browser/tunnel cache: a re-render overwrites final.mp4 in place
+const media = (rel, v) => (rel
+  ? `/media/${rel.split("/").map(encodeURIComponent).join("/")}${v ? `?v=${v}` : ""}`
+  : null);
 const fmtTime = (s) => {
   if (s === null || s === undefined) return "-";
   s = Math.round(s);
@@ -267,13 +270,26 @@ function clipCard(c) {
     inp.value = (parseFloat(inp.value || "0") + d).toFixed(1); updLen();
   } }, d > 0 ? `+${d}` : `${d}`);
 
-  const save = async () => {
+  // Saves the form. Returns the PUT result (r.rendering = a new render was queued) or null.
+  const persist = () => {
     const body = { title: title.value, hook: hook.value,
       hashtags: tags.value.split(/[\s,]+/).filter(Boolean) };
     if (start.value !== "") body.start = parseFloat(start.value);
     if (end.value !== "") body.end = parseFloat(end.value);
-    const r = await act(() => call("PUT", `/api/clips/${c.clip_id}`, body));
+    return act(() => call("PUT", `/api/clips/${c.clip_id}`, body));
+  };
+  const save = async () => {
+    const r = await persist();
     if (r) { toast(r.rendering ? "Kaydedildi, yeniden render kuyrukta." : "Kaydedildi."); loadClips(); }
+  };
+  // Re-render with what is in the form now (unsaved hook/trim edits included).
+  const rerender = async () => {
+    const r = await persist();
+    if (!r) return;
+    if (r.rendering || await act(() => call("POST", `/api/clips/${c.clip_id}/rerender`))) {
+      toast("Kaydedildi, yeniden render kuyrukta.");
+      loadClips();
+    }
   };
 
   const chosen = new Set(c.publish_targets.length ? c.publish_targets : PLATFORMS);
@@ -284,7 +300,7 @@ function clipCard(c) {
   });
 
   const video = c.video
-    ? h("video", { src: media(c.video), poster: media(c.thumb), controls: true, preload: "metadata", playsinline: true })
+    ? h("video", { src: media(c.video, c.media_v), poster: media(c.thumb, c.media_v), controls: true, preload: "metadata", playsinline: true })
     : c.raw_video
       ? h("video", { src: media(c.raw_video), controls: true, preload: "metadata", playsinline: true })
       : h("p", { class: "muted" }, "Video henüz yok.");
@@ -293,16 +309,15 @@ function clipCard(c) {
   if (editable) {
     actions.push(
       h("div", { class: "row" }, h("button", { onclick: save }, "Kaydet"),
-        h("button", { onclick: async () => {
-          if (await act(() => call("POST", `/api/clips/${c.clip_id}/rerender`), "Yeniden render kuyrukta.")) loadClips();
-        } }, "Yeniden render")),
+        h("button", { onclick: rerender }, "Yeniden render")),
       h("div", { class: "row" }, ...platformBoxes),
       h("div", { class: "row" }, h("button", { class: "ok", onclick: async () => {
-        await save();
+        if (!(await persist())) return;
         const r = await act(() => call("POST", `/api/clips/${c.clip_id}/approve`, { platforms: [...chosen] }));
         if (r) {
           const base = r.decision === "edited" ? "Onaylandı (düzenlenmiş)." : "Onaylandı.";
-          toast(r.planned ? `${base} ${r.planned} yayın planlandı.` : base);
+          toast(r.deferred ? `${base} Yeni render bitince yayın planlanacak.`
+            : r.planned ? `${base} ${r.planned} yayın planlandı.` : base);
           loadClips(); loadStatus();
         }
       } }, "Onayla")),
@@ -334,6 +349,7 @@ function clipCard(c) {
       h("div", {}, h("strong", {}, c.streamer), " ", h("span", { class: "muted" }, `@ ${fmtTime(c.peak_ts)} · #${c.candidate_id}`)),
       h("span", { class: "score", title: "LLM skoru" }, score ?? "-")),
     h("div", {}, badges(c)),
+    c.approve_pending ? h("p", { class: "muted" }, "Onaylandı: yeni render bitince onay tamamlanacak.") : null,
     c.permission_ok ? null : h("p", { class: "warn" }, "Bu yayıncı için izin işaretli değil: klip yayınlanmaz."),
     video,
     c.reason ? h("p", {}, (c.reject_stage ? `[${c.reject_stage}] ` : "") + c.reason) : null,
