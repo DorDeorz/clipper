@@ -45,8 +45,10 @@ Seçilen yayıncıların (Twitch / Kick / YouTube) canlı yayınlarını izler. 
 | `pytest` | Testler | |
 | `yt-dlp` (**opsiyonel**) | Sadece YouTube canlı/VOD HLS URL çözümlemesi | Twitch ve Kick için kendi kaydedicimiz var |
 | Font: Montserrat ExtraBold (OFL lisanslı) | Altyazı | `assets/fonts/` içine konur |
+| UltraFace RFB-320 ONNX modeli (MIT, 1.2 MB) (**opsiyonel**, 2026-11-21 kullanıcı onayı) | Yüz takibiyle dikey kırpma | Yeni pip paketi yok: faster-whisper ile zaten gelen `onnxruntime` + `av`. İlk kullanımda `data/models/face/` altına SHA-256 kontrollü iner |
+| `deep-filter` 0.5.6 (DeepFilterNet, MIT/Apache) (**opsiyonel**, 2026-11-21 kullanıcı onayı) | Klip sesinde gürültü temizleme | Resmi release'teki hazır program (PyTorch yok). İlk kullanımda `data/tools/` altına SHA-256 kontrollü iner, `denoise.binary` ile kendi kopyanız verilebilir |
 
-**Kullanılmayanlar (bilinçli):** Redis/Celery (yerine SQLite tabanlı kendi iş kuyruğumuz), streamlink (yerine kendi HLS kaydedicimiz), MediaPipe/OpenCV (facecam konumu config'ten veya Claude vision ile bir kez tespit), MoviePy/Remotion (saf ffmpeg), üçüncü parti paylaşım servisleri.
+**Kullanılmayanlar (bilinçli):** Redis/Celery (yerine SQLite tabanlı kendi iş kuyruğumuz), streamlink (yerine kendi HLS kaydedicimiz), MediaPipe/OpenCV (facecam konumu config'ten veya Claude vision ile bir kez tespit; klip içi yüz takibi onnxruntime + UltraFace ile), stable-ts (PyTorch getiriyor; aynı "sessizliğe hizalama" yöntemi `transcribe/word_align.py` içinde numpy ile), MoviePy/Remotion (saf ffmpeg), üçüncü parti paylaşım servisleri.
 
 ---
 
@@ -696,6 +698,10 @@ Reddet/onay kararları `feedback` tablosuna yazılır (bkz. 4.9). Reddet butonu 
 - [x] `clipper test-render --layout stack|blur|center` fixture'dan örnek çıktı üretir
   - Not: ffmpeg `testsrc2` + sahte facecam kutusu + ton ile örnek video üretir, çıktılar `data/test-render/<düzen>/final.mp4`.
 - [x] Testler: ffprobe ile çıktı 1080x1920, süre ±0.2 sn, ses var, -14 LUFS ±1.5. ASS dosyası beklenen satır sayısında. `tr_upper` testleri.
+- [x] (2026-11-21) Yüz takibi, DeepFilterNet, kelime zamanı düzeltme
+  - Not: `render/facetrack.py`: kareler PyAV ile 2 fps, yüzler UltraFace (onnxruntime CPU). `center` düzeninde 9:16 pencere yüzü takip eder (ölü bölge + hız sınırı, `crop` x'i `t`'nin parçalı doğrusal ifadesi). `stack` düzeninde üst panel facecam kutusunun içinden yüze ortalanmış, panel oranında kesilir. Yüz bulunmazsa / model inmezse eski kırpma. `render.face_tracking` (varsayılan açık).
+  - Not: `denoise.py`: `denoise.mode` = `off | transcribe | clip` (varsayılan `clip`), `atten_lim_db` 12: gürültü en fazla 12 dB kısılır, oyun sesi kaybolmaz. Transkript `raw.clean.wav`'dan, render sesi `clean.wav`'dan. Hata olursa orijinal ses.
+  - Not: `transcribe/word_align.py`: stable-ts `suppress_silence` mantığı; WAV'ın ses seviyesi maskesinde sessizliğe düşen kelime başı/sonu konuşma kenarına çekilir. `transcribe.refine_words` (varsayılan açık, canlı transkriptte kapalı).
 
 **Bitti sayılması için:** Gerçek VOD'dan 5 klip üç düzende render edilip telefonda izlendiğinde altyazı senkronu ve kadraj düzgün.
 

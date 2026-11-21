@@ -250,6 +250,7 @@ async def run(
                     update={
                         "model": cfg.live_transcribe.model,
                         "beam_size": cfg.live_transcribe.beam_size,
+                        "refine_words": False,  # live text only feeds the scanner
                     }
                 ),
                 cfg.model_dir,

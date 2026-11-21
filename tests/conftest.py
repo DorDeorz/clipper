@@ -83,3 +83,16 @@ def ts_segments(tmp_path_factory: pytest.TempPathFactory) -> list[Path]:
         check=True,
     )
     return sorted(out.glob("seg*.ts"))
+
+
+@pytest.fixture(autouse=True)
+def _no_tool_downloads(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests stay offline: the face model / deep-filter downloads fail, so the pipeline
+    takes its fallback (old crop, original audio). Tests that need them patch further."""
+    from clipper.util.download import DownloadError
+
+    async def blocked(url: str, *args: object, **kwargs: object) -> Path:
+        raise DownloadError(f"testlerde indirme yok: {url}")
+
+    monkeypatch.setattr("clipper.render.facetrack.ensure_pinned", blocked)
+    monkeypatch.setattr("clipper.denoise.ensure_pinned", blocked)

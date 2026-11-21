@@ -15,6 +15,7 @@ from typing import Any, Protocol
 from clipper.config import TranscribeConfig
 from clipper.log import get_logger
 from clipper.transcribe.cuda_libs import ensure_cuda_dlls
+from clipper.transcribe.word_align import refine_from_wav
 from clipper.util.fs import atomic_write_text
 
 log = get_logger("whisper")
@@ -103,6 +104,11 @@ class Transcriber:
                     "words": words,
                 }
             )
+        if self.cfg.refine_words:
+            try:
+                out = refine_from_wav(out, wav)
+            except Exception as exc:  # timing polish must never fail a transcript
+                log.warning("word refine skipped", extra={"error": str(exc)})
         return out
 
     async def transcribe(
@@ -137,6 +143,8 @@ class Transcriber:
             for block in iter(lambda: f.read(1 << 20), b""):
                 h.update(block)
         key = f"{self.cfg.model}|{self.cfg.language}|{self.cfg.beam_size}|{h.hexdigest()}"
+        if self.cfg.refine_words:
+            key += "|refine1"
         name = hashlib.sha256(key.encode()).hexdigest()
         return Path(self.cfg.cache_dir) / f"{name}.json"
 

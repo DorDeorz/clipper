@@ -24,7 +24,8 @@ detector:
   pre_roll: 40
   post_roll: 25
   weights: { rate: 0.40, uniq: 0.25, emote: 0.20, audio: 0.15 }
-transcribe: { model: large-v3, device: auto, compute_type: auto, language: tr, beam_size: 5 }
+transcribe: { model: large-v3, device: auto, compute_type: auto, language: tr, beam_size: 5,
+              refine_words: true }   # refine_words: kelime zamanlarını sessizliğe göre düzelt
 live_transcribe:           # r3: live transcript (content path)
   enabled: true
   model: large-v3-turbo    # speed first live; "small" without a GPU
@@ -64,6 +65,13 @@ render:
   loudness_lufs: -14
   min_len: 12
   max_len: 59
+  face_tracking: true      # center: kadraj yüzü takip eder; stack: facecam paneli yüze ortalanır
+  face_sample_fps: 2       # saniyede kaç kare yüz aranır
+  face_min_score: 0.7
+denoise:                   # DeepFilterNet (deep-filter programı ilk kullanımda iner)
+  mode: clip               # off | transcribe (sadece altyazı için) | clip (videonun sesi de)
+  atten_lim_db: 12         # gürültü en fazla bu kadar kısılır; oyun sesi kaybolmaz. 100 = tamamen sil
+  # binary: C:/tools/deep-filter.exe
 publish:
   min_gap_minutes: { youtube: 90, instagram: 120, x: 60, tiktok: 120 }
   daily_cap: { youtube: 8, instagram: 6, x: 10, tiktok: 6 }
