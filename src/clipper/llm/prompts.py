@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from clipper.models import ChatMessage
+from clipper.render.tr_text import tr_casefold
 
 PREFILTER_SYSTEM = """\
 Sen Türkçe canlı yayınlardan kısa dikey klip (YouTube Shorts, Instagram Reels, TikTok, X) \
@@ -274,10 +275,10 @@ def words_from_transcript(transcript: list[dict[str, Any]]) -> list[Word]:
 def apply_caption_fixes(
     transcript: list[dict[str, Any]], fixes: list[tuple[str, str]]
 ) -> list[dict[str, Any]]:
-    """Replace whole words (case-sensitive) in segment text and word lists."""
+    """Replace whole words (Turkish case-insensitive) in segment text and word lists."""
     if not fixes:
         return transcript
-    mapping = dict(fixes)
+    mapping = {tr_casefold(a.strip()): b.strip() for a, b in fixes if a.strip()}
     out = []
     for seg in transcript:
         words = [{**w, "w": _fix_word(str(w["w"]), mapping)} for w in seg.get("words", [])]
@@ -288,6 +289,7 @@ def apply_caption_fixes(
 
 def _fix_word(token: str, mapping: dict[str, str]) -> str:
     core = token.strip(".,!?;:…\"'")
-    if core in mapping:
-        return token.replace(core, mapping[core])
+    key = tr_casefold(core)
+    if core and key in mapping:
+        return token.replace(core, mapping[key])
     return token

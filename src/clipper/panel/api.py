@@ -227,6 +227,7 @@ def clip_card(row: sqlite3.Row, data_dir: Path) -> dict[str, Any]:
         "hook": judge.get("hook"),
         "hashtags": judge.get("hashtags") or [],
         "texts": judge.get("texts") or {},
+        "caption_fixes": judge.get("caption_fixes") or [],
         "flags": judge.get("flags") or {},
         "start": row["start_rel"],
         "end": row["end_rel"],
@@ -277,15 +278,34 @@ def _remember_original(llm: dict[str, Any], row: sqlite3.Row) -> None:
     )
 
 
+def _caption_fixes(value: Any) -> list[dict[str, str]]:
+    """Reviewer's caption word fixes: [{"from": "valoran", "to": "Valorant"}, ...]."""
+    if not isinstance(value, list):
+        raise PanelError("altyazı düzeltmeleri bir liste olmalı")
+    out: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise PanelError("altyazı düzeltmesi {from, to} olmalı")
+        a, b = str(item.get("from") or "").strip(), str(item.get("to") or "").strip()
+        if not a or not b:
+            raise PanelError("altyazı düzeltmesinde iki taraf da dolu olmalı")
+        out.append({"from": a, "to": b})
+    return out
+
+
 def edit_clip(conn: sqlite3.Connection, clip_id: int, data: dict[str, Any]) -> dict[str, Any]:
-    """Edit title / hook / hashtags / platform texts and trim (start, end in raw time).
+    """Edit title / hook / hashtags / platform texts / caption fixes and trim (start, end
+    in raw time).
     Returns {"needs_render": bool}."""
     row = _clip(conn, clip_id)
     llm = _jl(row["llm_json"], {})
     _remember_original(llm, row)
     judge = llm.setdefault("judge", {})
     old_hook = judge.get("hook")
+    old_fixes = judge.get("caption_fixes") or []
     title = row["title"]
+    if "caption_fixes" in data:
+        judge["caption_fixes"] = _caption_fixes(data["caption_fixes"])
     for k in EDITABLE_TEXT_KEYS:
         if k in data:
             judge[k] = data[k]
@@ -295,6 +315,7 @@ def edit_clip(conn: sqlite3.Connection, clip_id: int, data: dict[str, Any]) -> d
                     raise PanelError("başlık 1-100 karakter olmalı")
     start, end = row["start_rel"], row["end_rel"]
     needs_render = "hook" in data and (data["hook"] or None) != (old_hook or None)
+    needs_render = needs_render or (judge.get("caption_fixes") or []) != old_fixes
     if "start" in data or "end" in data:
         dur = float((llm.get("cut") or {}).get("duration") or 1e9)
         start = float(data.get("start", start if start is not None else 0.0))

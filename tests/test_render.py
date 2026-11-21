@@ -210,3 +210,33 @@ def test_facecam_not_found(tmp_path: Path, conn: object) -> None:
     llm = LLMClient(conn, LLMConfig(), fake.client())
     sug = asyncio.run(suggest_facecam(llm, [f, f], "claude-sonnet-5-5"))
     assert sug.rect is None and sug.reasons == ["yok", "yok"]
+
+
+def test_long_hook_wraps_and_shrinks_instead_of_overflowing() -> None:
+    """Bug: WrapStyle 2 never wraps, so a long hook ran off the 1080 px frame."""
+    from clipper.render.ass_captions import CaptionStyle, fit_lines
+
+    style = CaptionStyle()
+    hook = "bu adam ne yapıyor böyle ya inanılmaz bir an oldu gerçekten"
+    ass = build_ass([], duration=5, layout="blur", hook=hook)
+    line = next(x for x in ass.splitlines() if ",Hook," in x and x.startswith("Dialogue"))
+    text = line.split("}", 1)[1]
+    lines = text.split("\\N")
+    assert 1 < len(lines) <= style.hook_max_lines
+    m = re.search(r"\\fs(\d+)", line)
+    size = int(m.group(1)) if m else style.hook_size
+    fit = int(style.hook_line_chars * style.hook_size / size)
+    assert all(len(x) <= fit for x in lines)
+    assert " ".join(lines) == "BU ADAM NE YAPIYOR BÖYLE YA İNANILMAZ BİR AN OLDU GERÇEKTEN"
+    # short hooks are untouched
+    assert fit_lines("BAK ŞUNA", 64, 18, 3, 40) == (["BAK ŞUNA"], 64)
+    # a single huge word is shrunk to fit the width
+    lines2, size2 = fit_lines("A" * 40, 64, 18, 3, 40)
+    assert lines2 == ["A" * 40] and size2 * 40 <= 64 * 18
+
+
+def test_overlong_caption_word_is_shrunk() -> None:
+    words = [CapWord("inanılmazdıryanigerçekten", 0.0, 1.0)]
+    ass = build_ass(words, duration=2, layout="blur")
+    cap = next(x for x in ass.splitlines() if ",Cap," in x and x.startswith("Dialogue"))
+    assert "\\fs" in cap

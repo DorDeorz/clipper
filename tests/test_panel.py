@@ -354,3 +354,20 @@ def test_live_list_and_mark(client: TestClient, world: Any) -> None:
     assert ts > 0
     kinds = [r[0] for r in conn.execute("SELECT kind FROM live_events WHERE session_id = 9")]
     assert kinds == ["mark"]
+
+
+def test_caption_fixes_edit_rerenders(client: TestClient, world: Any) -> None:
+    conn, _ = world
+    fixes = [{"from": "valoran", "to": "Valorant"}]
+    r = client.put("/api/clips/1", json={"caption_fixes": fixes}).json()
+    assert r == {"needs_render": True, "rendering": True}
+    llm = json.loads(conn.execute("SELECT llm_json FROM clips WHERE id = 1").fetchone()[0])
+    assert llm["judge"]["caption_fixes"] == fixes
+    conn.execute("UPDATE candidates SET status = 'rendered' WHERE id = 1")
+    conn.execute("DELETE FROM jobs")
+    assert client.get("/api/clips?view=review").json()[0]["caption_fixes"] == fixes
+    # saving the same fixes again (the Approve button always saves) queues no render
+    r = client.put("/api/clips/1", json={"caption_fixes": fixes, "hook": "bak şuna"}).json()
+    assert r == {"needs_render": False}
+    bad = client.put("/api/clips/1", json={"caption_fixes": [{"from": "x", "to": ""}]})
+    assert bad.status_code == 400

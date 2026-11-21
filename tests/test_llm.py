@@ -235,6 +235,12 @@ def test_caption_fixes() -> None:
     out = apply_caption_fixes(tr, [("valoran", "Valorant")])
     assert out[0]["text"] == "Valorant oynuyoruz, Valorant!"
     assert out[0]["words"][0]["w"] == "Valorant"
+    # reviewer fixes are Turkish case-insensitive (captions are shown upper-cased)
+    out = apply_caption_fixes(tr, [("VALORAN", "Valorant")])
+    assert out[0]["text"] == "Valorant oynuyoruz, Valorant!"
+    out = apply_caption_fixes([{"text": "Iyi", "words": [{"w": "Iyi", "s": 0, "e": 1}]}],
+                              [("ıyı", "iyi")])  # fmt: skip
+    assert out[0]["words"][0]["w"] == "iyi"
 
 
 def test_chat_timeline_relative_seconds() -> None:

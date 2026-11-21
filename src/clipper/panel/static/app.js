@@ -256,6 +256,8 @@ function clipCard(c) {
   const title = h("input", { type: "text", value: c.title || "", maxlength: 100 });
   const hook = h("input", { type: "text", value: c.hook || "" });
   const tags = h("input", { type: "text", value: (c.hashtags || []).join(" ") });
+  const fixes = h("textarea", { rows: 2, placeholder: "yanlış → doğru (satır başına bir kelime)" });
+  fixes.value = (c.caption_fixes || []).map((f) => `${f.from} → ${f.to}`).join("\n");
   const start = h("input", { type: "number", step: "0.5", value: c.start ?? "" });
   const end = h("input", { type: "number", step: "0.5", value: c.end ?? "" });
   const len = h("span", { class: "muted" });
@@ -273,7 +275,10 @@ function clipCard(c) {
   // Saves the form. Returns the PUT result (r.rendering = a new render was queued) or null.
   const persist = () => {
     const body = { title: title.value, hook: hook.value,
-      hashtags: tags.value.split(/[\s,]+/).filter(Boolean) };
+      hashtags: tags.value.split(/[\s,]+/).filter(Boolean),
+      caption_fixes: fixes.value.split("\n").map((l) => l.split(/→|->|=/))
+        .filter((p) => p.length === 2 && p[0].trim() && p[1].trim())
+        .map(([a, b]) => ({ from: a.trim(), to: b.trim() })) };
     if (start.value !== "") body.start = parseFloat(start.value);
     if (end.value !== "") body.end = parseFloat(end.value);
     return act(() => call("PUT", `/api/clips/${c.clip_id}`, body));
@@ -358,6 +363,7 @@ function clipCard(c) {
     h("label", {}, "Başlık", title),
     h("label", {}, "Hook (ilk 2.5 sn)", hook),
     h("label", {}, "Hashtag'ler", tags),
+    h("label", {}, "Altyazı düzeltmeleri", fixes),
     h("div", { class: "trim" }, "Başla", nudge(start, -1), start, nudge(start, 1),
       "Bitir", nudge(end, -1), end, nudge(end, 1), len),
     ...actions);
