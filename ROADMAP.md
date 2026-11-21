@@ -481,7 +481,7 @@ Hesap (her saniye):
   "reason": "kısa gerekçe",
   "start": 0.0, "end": 0.0,
   "title": "≤ 70 karakter, Türkçe, clickbait ama yalan değil",
-  "hook": "ilk 2.5 sn ekranda görünecek ≤ 6 kelime",
+  "hook": "ilk 2.5 sn ekranda görünecek ≤ 7 kelime, ≤ 45 karakter; paylaşan sayfanın ağzından (3. şahıs), somut ve merak uyandıran",
   "caption_fixes": [{"from": "yanlış duyulan", "to": "doğrusu"}],
   "hashtags": ["#..."],
   "texts": {

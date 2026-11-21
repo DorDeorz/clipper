@@ -15,7 +15,9 @@ from clipper.llm.prompts import (
     apply_caption_fixes,
     chat_timeline,
     judge_system,
+    judge_user,
     snap_to_words,
+    spoken_name,
 )
 from clipper.llm.schemas import (
     ContentScanDecision,
@@ -207,6 +209,38 @@ def test_strict_schema_keeps_every_model_field(model: type[Any], payload: dict[s
 def test_judge_system_formats_lengths() -> None:
     s = judge_system(12, 59)
     assert "12-59 saniye" in s and '{"from": "yanlış"' in s
+
+
+def test_judge_system_asks_for_third_person_specific_hooks() -> None:
+    s = judge_system(12, 59)
+    # Titles/hooks are written by the page sharing the clip, not by the streamer.
+    assert "üçüncü şahıs" in s and "birinci şahıs" in s
+    assert "Metinlerde kullanılacak ad" in s
+    # Generic hooks are called out explicitly.
+    assert "chat çıldırdı" in s and "somut" in s
+    assert "Eray'ın parası kulübe yetmedi" in s
+
+
+@pytest.mark.parametrize(
+    ("display", "spoken"),
+    [
+        ("BerkcanOguslu", "Berkcan"),
+        ("Eray", "Eray"),
+        ("AOGofficial", "AOGofficial"),
+        ("evelone2004", "evelone2004"),
+        ("RRaenee", "RRaenee"),
+        ("ŞahinÖzdemir", "Şahin"),
+        ("@CanBey", "Can"),
+    ],
+)
+def test_spoken_name(display: str, spoken: str) -> None:
+    assert spoken_name(display) == spoken
+
+
+def test_judge_user_names_the_streamer() -> None:
+    user = judge_user("BerkcanOguslu", "GTA 6", 60, "[0.0] selam", "(chat yok)", "", [])
+    assert "Yayıncı: BerkcanOguslu" in user
+    assert "Metinlerde kullanılacak ad: Berkcan" in user
 
 
 def test_snap_to_words() -> None:
