@@ -94,7 +94,13 @@ def test_sec06_titles_cannot_inject_ass_or_filters() -> None:
     ass = build_ass([CapWord(EVIL, 0.0, 1.0)], duration=2.0, layout="blur", hook=EVIL)
     dialogue = [ln for ln in ass.splitlines() if ln.startswith("Dialogue")]
     body = "\n".join(ln.split(",,", 1)[1] for ln in dialogue)
-    assert "{\\an8}" not in body and "\\N" not in body.replace("{\\", "")
+    assert "{\\an8}" not in body
+    # Only the hook gets our own \N line breaks (from word wrapping); the user's "\N"
+    # is neutralised to "/N", so no break ever appears inside a word.
+    cap = [ln for ln in dialogue if ",Cap," in ln]
+    hook = next(ln for ln in dialogue if ",Hook," in ln).split("}", 1)[1]
+    assert all("\\N" not in ln.replace("{\\", "") for ln in cap)
+    assert "(/AN8)KÖTÜ/N" in hook and "\\" not in hook.replace("\\N", "")
     # The text never reaches the ffmpeg filter graph (it lives in the .ass file).
     graph = filter_graph("blur", None, ass_name="clip.ass", fontsdir=None, fps=30,
                          loudness=-14.0, width=1080, height=1920)  # fmt: skip

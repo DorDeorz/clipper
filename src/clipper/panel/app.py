@@ -261,7 +261,8 @@ def create_app(deps: PanelDeps) -> FastAPI:
 
     @app.get("/media/{rel:path}", include_in_schema=False)
     async def media(rel: str) -> FileResponse:
-        return FileResponse(safe_media_path(data_dir, rel))
+        # re-renders overwrite files in place: always revalidate (browser and tunnel/CDN)
+        return FileResponse(safe_media_path(data_dir, rel), headers={"Cache-Control": "no-cache"})
 
     # ---- status / logs / costs ----------------------------------------------------------
 
@@ -560,6 +561,9 @@ def create_app(deps: PanelDeps) -> FastAPI:
         if platforms and not scheduler.permitted(conn, clip_id):
             raise PanelError("bu yayıncı için izin işaretli değil; yayın platformu seçilemez", 403)
         decision = api.approve(conn, clip_id, platforms)
+        if api.is_deferred(conn, clip_id):
+            # a re-render is running: publications are planned when the new video lands
+            return {"ok": True, "decision": decision, "planned": 0, "deferred": True}
         planned = 0
         if platforms and kit is not None:
             planned = len(scheduler.plan(conn, cfg, clip_id, platforms, kit.accounts))

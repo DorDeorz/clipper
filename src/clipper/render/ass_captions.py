@@ -6,7 +6,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from clipper.render.tr_text import tr_upper
+from clipper.render.tr_text import tr_upper, wrap_words
 
 PUNCT_BREAK = (".", "!", "?", ",", ";", ":", "…")
 HIGHLIGHT = r"{\c&H00FFFF&\fscx110\fscy110}"
@@ -30,6 +30,11 @@ class CaptionStyle:
     max_chars: int = 18
     gap_break: float = 0.6
     hook_seconds: float = 2.5
+    # Upper-case characters that fit on one 1080 px line at `hook_size` (Montserrat
+    # ExtraBold, box padding and margins included). WrapStyle 2 never wraps on its own.
+    hook_line_chars: int = 18
+    hook_max_lines: int = 3
+    hook_min_size: int = 40
 
 
 def caption_y(layout: str, height: int = 1920) -> int:
@@ -39,6 +44,26 @@ def caption_y(layout: str, height: int = 1920) -> int:
 
 def _clean(text: str) -> str:
     return " ".join(text.replace("{", "(").replace("}", ")").replace("\\", "/").split())
+
+
+def fit_lines(
+    text: str, size: int, line_chars: int, max_lines: int, min_size: int
+) -> tuple[list[str], int]:
+    """Break `text` into at most `max_lines` lines that fit the frame width, shrinking
+    the font when needed. `line_chars` is how many characters fit at `size`. Returns
+    (lines, font size)."""
+    words = text.split()
+    cur = size
+    while True:
+        chars = max(1, int(line_chars * size / cur))
+        lines = [" ".join(x) for x in wrap_words(words, chars)]
+        longest = max((len(x) for x in lines), default=0)
+        if (len(lines) <= max_lines and longest <= chars) or cur <= min_size:
+            break
+        cur = max(min_size, round(cur * 0.88))
+    if longest > chars:  # one huge word: shrink until it fits the width
+        cur = max(1, int(cur * chars / longest))
+    return lines, cur
 
 
 def group_words(
@@ -115,13 +140,25 @@ def build_ass(
     events: list[str] = []
     if hook and hook.strip():
         end = min(style.hook_seconds, duration)
+        scale = width / 1080
+        lines, size = fit_lines(
+            _clean(tr_upper(hook)),
+            style.hook_size,
+            round(style.hook_line_chars * scale),
+            style.hook_max_lines,
+            style.hook_min_size,
+        )
+        fs = "" if size == style.hook_size else f"\\fs{size}"
         events.append(
             f"Dialogue: 1,{ass_time(0)},{ass_time(end)},Hook,,0,0,0,,"
-            f"{{\\pos({x},{round(height * 180 / 1920)})}}{_clean(tr_upper(hook))}"
+            f"{{\\pos({x},{round(height * 180 / 1920)}){fs}}}" + "\\N".join(lines)
         )
     for group in group_words([w for w in words if w.s < duration], style):
         texts = [_clean(tr_upper(w.w)) for w in group]
         g_end = min(group[-1].e, duration)
+        n = len(" ".join(texts))
+        # a group is at most max_chars unless one word alone is longer: shrink that one
+        fs = f"\\fs{int(style.size * style.max_chars / n)}" if n > style.max_chars else ""
         for i, w in enumerate(group):
             start = w.s
             end = group[i + 1].s if i + 1 < len(group) else g_end
@@ -130,7 +167,7 @@ def build_ass(
             parts = [f"{HIGHLIGHT}{t}{RESET}" if j == i else t for j, t in enumerate(texts)]
             events.append(
                 f"Dialogue: 0,{ass_time(start)},{ass_time(min(end, duration))},Cap,,0,0,0,,"
-                f"{{\\pos({x},{y})}}" + " ".join(parts)
+                f"{{\\pos({x},{y}){fs}}}" + " ".join(parts)
             )
     return header + "\n".join(events) + ("\n" if events else "")
 
