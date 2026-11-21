@@ -48,8 +48,15 @@ def _f(v: float) -> str:
     return f"{v:.4f}".rstrip("0").rstrip(".") or "0"
 
 
-def video_graph(layout: str, facecam: Rect | None, width: int = 1080, height: int = 1920) -> str:
-    """Filter chain from [0:v] to [v0] for the given layout."""
+def video_graph(
+    layout: str,
+    facecam: Rect | None,
+    width: int = 1080,
+    height: int = 1920,
+    pan: str | None = None,
+) -> str:
+    """Filter chain from [0:v] to [v0] for the given layout. `pan` (center only) is an
+    expression of `t` giving the crop position 0..1 along the free width (face tracking)."""
     layout = effective_layout(layout, facecam)
     if layout == "stack":
         assert facecam is not None
@@ -67,7 +74,8 @@ def video_graph(layout: str, facecam: Rect | None, width: int = 1080, height: in
             "[cam][game]vstack=inputs=2[v0]"
         )
     if layout == "center":
-        return f"[0:v]crop='min(iw,ih*9/16)':'min(ih,iw*16/9)',scale={width}:{height}[v0]"
+        pos = f":'(iw-ow)*({pan})':'(ih-oh)/2'" if pan else ""
+        return f"[0:v]crop='min(iw,ih*9/16)':'min(ih,iw*16/9)'{pos},scale={width}:{height}[v0]"
     return (
         f"[0:v]split=2[bg][fg];"
         f"[bg]scale={width}:{height}:force_original_aspect_ratio=increase,"
@@ -87,10 +95,12 @@ def filter_graph(
     loudness: float = -14.0,
     width: int = 1080,
     height: int = 1920,
+    pan: str | None = None,
+    audio_input: int = 0,
 ) -> str:
     """Full -filter_complex. `ass_name` / `fontsdir` must be relative paths (the render
     runs with cwd = clip dir), which avoids escaping ':' and '\\' of Windows paths."""
-    parts = [video_graph(layout, facecam, width, height)]
+    parts = [video_graph(layout, facecam, width, height, pan)]
     tail = f"[v0]setsar=1,fps={fps}"
     if ass_name:
         sub = f"subtitles={ass_name}"
@@ -98,5 +108,5 @@ def filter_graph(
             sub += f":fontsdir={fontsdir}"
         tail += f",{sub}"
     parts.append(tail + ",format=yuv420p[v]")
-    parts.append(f"[0:a]loudnorm=I={_f(loudness)}:TP=-1.5:LRA=11,aresample=48000[a]")
+    parts.append(f"[{audio_input}:a]loudnorm=I={_f(loudness)}:TP=-1.5:LRA=11,aresample=48000[a]")
     return ";".join(parts)

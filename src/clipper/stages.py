@@ -24,6 +24,7 @@ from clipper.content.batch import (
     transcribe_session,
 )
 from clipper.content.scanner import ContentScanner
+from clipper.denoise import CLEAN_WAV
 from clipper.learn.service import gate_model, gate_probability
 from clipper.llm.client import LLMBudgetExceeded, LLMClient, LLMRefused
 from clipper.llm.prompts import (
@@ -48,6 +49,7 @@ from clipper.media import MediaError
 from clipper.models import ChatMessage
 from clipper.recorder.cutter import cut
 from clipper.render.clip import render_clip
+from clipper.render.facetrack import FacePlan, get_detector, plan_face
 from clipper.render.ffmpeg import RenderError
 from clipper.render.layouts import Rect, effective_layout
 from clipper.sessions import CHAT_FILE, LIVE_CHAT_FILE
@@ -253,6 +255,8 @@ class Stages:
         out = raw.with_name("transcript.json")
         if not out.is_file():
             origin = self._llm_json(clip).get("cut", {}).get("t0")
+            if self.cfg.denoise.mode != "off" and self.cfg.transcribe.backend != "fake":
+                wav = await self._denoise(candidate_id, raw, wav)
             await self.transcriber.transcribe(wav, out, origin=origin)
         self.conn.execute(
             "UPDATE clips SET transcript_path = ? WHERE candidate_id = ?", (str(out), candidate_id)
@@ -275,6 +279,45 @@ class Stages:
         jobs.enqueue(
             self.conn, "prefilter", {"candidate_id": candidate_id}, "io", PREFILTER_PRIORITY
         )
+
+    async def _denoise(self, candidate_id: int, raw: Path, wav: Path) -> Path:
+        """DeepFilterNet pass; on any failure the clip keeps its original audio."""
+        from clipper.denoise import CLEAN_16K, denoise_clip, ensure_deep_filter
+
+        if raw.with_name(CLEAN_16K).is_file():
+            return raw.with_name(CLEAN_16K)
+        try:
+            binary = await ensure_deep_filter(self.cfg)
+            _, clean16 = await denoise_clip(
+                raw, binary, ffmpeg=self.cfg.paths.ffmpeg,
+                atten_lim_db=self.cfg.denoise.atten_lim_db,
+            )  # fmt: skip
+            return clean16
+        except Exception as exc:
+            log.warning("denoise skipped", extra={"candidate_id": candidate_id, "error": str(exc)})
+            return wav
+
+    async def _face_plan(
+        self, candidate_id: int, raw: Path, start: float, end: float, layout: str,
+        facecam: Rect | None,
+    ) -> FacePlan | None:  # fmt: skip
+        """Face tracking for the crop; None (old crop) when off, not applicable or failed."""
+        rc = self.cfg.render
+        layout = effective_layout(layout, facecam)
+        if not rc.face_tracking or layout not in ("center", "stack"):
+            return None
+        try:
+            detector = await get_detector(self.cfg.model_dir, rc.face_min_score)
+            return await plan_face(
+                detector, raw, start, end, layout=layout, facecam=facecam,
+                fps=rc.face_sample_fps,
+                panel_aspect=rc.width / max(round(rc.height * 608 / 1920), 1),
+            )  # fmt: skip
+        except Exception as exc:
+            log.warning(
+                "face tracking skipped", extra={"candidate_id": candidate_id, "error": str(exc)}
+            )
+            return None
 
     async def handle_prefilter(self, candidate_id: int, payload: dict[str, Any]) -> None:
         llm = self._require_llm()
@@ -528,6 +571,9 @@ class Stages:
         except (ValueError, KeyError):
             facecam = None
         raw = Path(clip["raw_path"])
+        layout = streamer["layout"] if streamer else "blur"
+        face = await self._face_plan(candidate_id, raw, start, end, layout, facecam)
+        clean = raw.with_name(CLEAN_WAV) if self.cfg.denoise.mode == "clip" else None
         try:
             res = await render_clip(
                 self.cfg.render,
@@ -542,13 +588,17 @@ class Stages:
                 thumb_at=(float(peak[0]) - t0) if peak else None,
                 ffmpeg=self.cfg.paths.ffmpeg,
                 fonts_dir=self.cfg.paths.fonts_dir,
+                face=face,
+                clean_audio=clean,
             )
         except RenderError as exc:
             raise StageError(str(exc)) from exc
         data["render"] = {
             "encoder": res.encoder,
             "duration": round(res.duration, 3),
-            "layout": effective_layout(streamer["layout"] if streamer else "blur", facecam),
+            "layout": effective_layout(layout, facecam),
+            "face": face.kind if face else None,
+            "denoised": bool(clean and clean.is_file()),
         }
         self.conn.execute(
             "UPDATE clips SET final_path = ?, thumb_path = ?, llm_json = ? WHERE candidate_id = ?",

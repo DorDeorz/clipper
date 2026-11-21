@@ -240,6 +240,9 @@ class TranscribeConfig(_Strict):
     backend: Literal["whisper", "fake"] = "whisper"
     fake_path: Path | None = None
     cache_dir: Path | None = None
+    # stable-ts style: word starts/ends that fall into silence are moved to the speech
+    # edge (energy of the WAV), so captions appear with the voice, not before it.
+    refine_words: bool = True
 
 
 class LLMConfig(_Strict):
@@ -270,6 +273,22 @@ class RenderConfig(_Strict):
     loudness_lufs: float = -14
     min_len: float = 12
     max_len: float = 59
+    # Face tracking (UltraFace ONNX on onnxruntime, frames via PyAV): `center` pans after
+    # the face, `stack` cuts the facecam panel around it. No face -> the old crop.
+    face_tracking: bool = True
+    face_sample_fps: float = Field(2.0, gt=0, le=10)
+    face_min_score: float = Field(0.7, gt=0, lt=1)
+
+
+class DenoiseConfig(_Strict):
+    """DeepFilterNet (`deep-filter` binary). `transcribe`: only whisper hears the cleaned
+    audio. `clip`: the video gets it too. `atten_lim_db` caps how much non-speech sound is
+    removed (game audio stays, just quieter); 100 = remove everything."""
+
+    mode: Literal["off", "transcribe", "clip"] = "clip"
+    atten_lim_db: float = Field(12, ge=0, le=100)
+    # Own deep-filter executable; None = pinned release download into data/tools/.
+    binary: Path | None = None
 
 
 class PublishConfig(_Strict):
@@ -389,6 +408,7 @@ class Config(_Strict):
     merge: MergeConfig = Field(default_factory=MergeConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     render: RenderConfig = Field(default_factory=RenderConfig)
+    denoise: DenoiseConfig = Field(default_factory=DenoiseConfig)
     publish: PublishConfig = Field(default_factory=PublishConfig)
     workers: WorkersConfig = Field(default_factory=WorkersConfig)
     retention: RetentionConfig = Field(default_factory=RetentionConfig)

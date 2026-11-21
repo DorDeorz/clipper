@@ -52,11 +52,14 @@ def build_render_args(
     out: Path | str,
     encoder: str,
     fps: int = 30,
+    audio: Path | None = None,
 ) -> list[str]:
+    """`audio`: optional cleaned track (same timeline as `raw`) used as input 1."""
+    extra = ["-ss", f"{start:.3f}", "-to", f"{end:.3f}", "-i", str(audio)] if audio else []
     return [
         ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-nostats",
         "-progress", "pipe:1",
-        "-ss", f"{start:.3f}", "-to", f"{end:.3f}", "-i", str(raw),
+        "-ss", f"{start:.3f}", "-to", f"{end:.3f}", "-i", str(raw), *extra,
         "-filter_complex", graph, "-map", "[v]", "-map", "[a]",
         *encoder_args(encoder, fps),
         str(out),
